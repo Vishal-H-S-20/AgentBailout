@@ -1,5 +1,11 @@
 # Actual progress
 
+## AgentBailout 3.0 critical repair and dashboard upgrade — November 1, 2026 IST
+
+Reproduced duplicate preconfigured injection 409 and identified the misleading draft-vs-saved task configuration path. Added explicit new-task UUID selection, visible saved settings, preconfigured/manual modes, action eligibility guards, friendly backend-coded errors and serialized injection checks. Redesigned the existing Streamlit UI using the supplied visual references, verified in a browser, and saved Overview/recovery screenshots. Added persisted bounded Python runtime normalization and read-only GitHub/source syntax diagnostics.
+
+59 tests passed in 32.57s. Existing and critical dashboard scripts passed against the running backend. Browser-created crash task completed with a recovered Formatter and settled ledger. GitHub CPython colorsys.py fetched and syntax-validated without execution. Full report: AGENTBAILOUT3_REPAIR.md. This update does not claim all earlier Phase 5–8 roadmap features or arbitrary repository self-repair.
+
 ## Phase 4 — configurable workflows and universal replacement verified
 
 Preserved Phase 3 commit 6438d16 with tag phase3-working-6438d16. Added versioned database agent registry, three templates, saved/ordered workflows, immutable execution snapshots, offline/OpenAI provider abstraction, all-stage watchdog/runtime limits, universal compatible replacement pool, actual backend protection toggle, controlled baseline/protected comparison, per-attempt usage/history, repeated-failure stop and additive backed-up database migration. Extended settlement to arbitrary supported stage counts and bounded replacement expenses. Dashboard exposes builder, registry, pool, protection and comparison controls.

@@ -1,4 +1,5 @@
 import asyncio
+import httpx
 from datetime import datetime
 from decimal import Decimal
 from pydantic import BaseModel
@@ -7,7 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import select
+from sqlalchemy import select, text
 from backend.database import Base, engine, SessionLocal
 from backend.models import Task, Stage, Event, Agent, Workflow, Execution, Comparison
 from backend.schemas import TaskCreate, TaskView, EventView, FaultDefinition, AgentCreate, WorkflowCreate
@@ -38,7 +39,7 @@ def create_app(db_engine=engine, factory=SessionLocal) -> FastAPI:
             job.cancel()
         await asyncio.gather(*jobs, return_exceptions=True)
 
-    app = FastAPI(title='AgentBailout', version='0.4.0', lifespan=lifespan)
+    app = FastAPI(title='AgentBailout', version='0.4.1', lifespan=lifespan)
 
     @app.exception_handler(IntegrityError)
     async def conflict(request, exc):
@@ -55,7 +56,7 @@ def create_app(db_engine=engine, factory=SessionLocal) -> FastAPI:
     def health():
         with factory() as db:
             db.execute(select(1))
-        return {'status': 'ok', 'phase': 4}
+        return {'status': 'ok', 'phase': 4, 'version':'0.4.1'}
 
     @app.post('/tasks', response_model=TaskView, status_code=201)
     def create_task(body: TaskCreate):
@@ -98,6 +99,9 @@ def create_app(db_engine=engine, factory=SessionLocal) -> FastAPI:
     @app.post('/tasks/{task_id}/inject-failure')
     def inject(task_id: str, body: FailureRequest):
         with factory.begin() as db:
+            # Serialize eligibility checking with the supervisor's pending→running write.
+            # An accepted injection commits before a stage can claim its input/fault snapshot.
+            db.execute(text('BEGIN IMMEDIATE'))
             task = db.get(Task, task_id)
             if task is None:
                 raise HTTPException(404, 'Task not found')
@@ -105,10 +109,14 @@ def create_app(db_engine=engine, factory=SessionLocal) -> FastAPI:
             index = body.stage_index if body.stage_index is not None else min(1,len(task.stages)-1)
             if index >= len(task.stages):
                 raise HTTPException(422,'Failure stage is outside the workflow')
-            if task.status not in {'CREATED', 'RUNNING'} or task.stages[index].status != 'PENDING':
-                raise HTTPException(409, 'Only pending stages accept controlled faults')
+            if task.status not in {'CREATED','RUNNING'}:
+                raise HTTPException(409,{'code':'TASK_TERMINAL','message':'This task is already complete. Create a new task to inject a failure.','task_id':task_id})
             if db.scalar(select(Event.id).where(Event.task_id == task_id, Event.type == 'FAILURE_INJECTED')):
-                raise HTTPException(409, 'Failure already configured')
+                raise HTTPException(409,{'code':'FAULT_ALREADY_CONFIGURED','message':'A failure is already configured for this task. It will occur automatically at the saved stage.','task_id':task_id})
+            if task.stages[index].status != 'PENDING':
+                raise HTTPException(409,{'code':'STAGE_STARTED','message':'This stage has already started. Choose a pending stage.','task_id':task_id,'stage_index':index})
+            if body.scenario=='normal':
+                raise HTTPException(422,{'code':'FAULT_REQUIRED','message':'Choose an active failure type for manual injection.'})
             if execution:
                 config = dict(execution.configuration)
                 config['failure'] = {'scenario':body.scenario,'stage_index':index}
@@ -118,7 +126,7 @@ def create_app(db_engine=engine, factory=SessionLocal) -> FastAPI:
             else:
                 message = body.scenario
             db.add(Event(task_id=task_id, type='FAILURE_INJECTED', message=message))
-        return {'scenario': body.scenario}
+        return {'task_id':task_id,'scenario': body.scenario,'stage_index':index,'message':'Failure saved. It will occur when the selected stage begins.'}
 
     @app.get('/tasks/{task_id}/ledger')
     def ledger(task_id: str):
@@ -247,6 +255,27 @@ def create_app(db_engine=engine, factory=SessionLocal) -> FastAPI:
                     'simulated_allocation_difference':str(allocations[1]-allocations[0]) if all(a is not None for a in allocations) else None,
                     'api_cost_difference':str(Decimal(protected['api_cost'])-Decimal(baseline['api_cost'])) if baseline['api_cost'] is not None and protected['api_cost'] is not None else None,
                     'note':'Sequential controlled runs with frozen agent versions and identical fault; external LLM outputs can vary. Positive time difference means protection took longer.'}
+
+    from backend.diagnostics import DiagnosticRequest, diagnose
+
+    @app.post('/diagnostics',status_code=201)
+    async def diagnostics(body: DiagnosticRequest):
+        from backend.models import DiagnosticRun
+        try:
+            report=await diagnose(body)
+        except (ValueError,UnicodeError,httpx.HTTPError) as exc:
+            raise HTTPException(422,str(exc)) from None
+        with factory.begin() as db:
+            row=DiagnosticRun(report=report)
+            db.add(row)
+            db.flush()
+            return {'id':row.id,**report}
+
+    @app.get('/diagnostics')
+    def diagnostic_history():
+        from backend.models import DiagnosticRun
+        with factory() as db:
+            return [{'id':r.id,'created_at':r.created_at,**r.report} for r in db.scalars(select(DiagnosticRun).order_by(DiagnosticRun.created_at.desc()).limit(100))]
 
     return app
 

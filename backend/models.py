@@ -123,3 +123,10 @@ class Comparison(Base):
     baseline_id: Mapped[str] = mapped_column(ForeignKey('tasks.id'))
     protected_id: Mapped[str] = mapped_column(ForeignKey('tasks.id'))
     created_at: Mapped[str] = mapped_column(default=now)
+
+
+class DiagnosticRun(Base):
+    __tablename__ = 'diagnostic_runs'
+    id: Mapped[str] = mapped_column(primary_key=True, default=lambda: str(uuid4()))
+    report: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[str] = mapped_column(default=now)

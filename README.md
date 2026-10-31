@@ -1,5 +1,7 @@
 # AgentBailout
 
+Latest update: the critical injection/state repair, reference-inspired dashboard redesign and bounded Python/GitHub diagnostics are implemented. See [AgentBailout 3.0 repair and demo report](docs/AGENTBAILOUT3_REPAIR.md) for exact behavior, evidence and limits. Backend remains on port 8003; dashboard on 8501.
+
 **The Self-Healing Control Plane for AI Agents**
 
 Detect. Diagnose. Decide. Repair. Replace. Recover.

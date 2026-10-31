@@ -1,5 +1,5 @@
 $ErrorActionPreference = 'Stop'
-$base = 'http://127.0.0.1:8000'
+$base = 'http://127.0.0.1:8003'
 $task = Invoke-RestMethod "$base/tasks" -Method Post -ContentType 'application/json' -Body '{"prompt":"Plan a community garden with a measurable pilot"}'
 Invoke-RestMethod "$base/tasks/$($task.id)/start" -Method Post
 $deadline = (Get-Date).AddSeconds(30)
