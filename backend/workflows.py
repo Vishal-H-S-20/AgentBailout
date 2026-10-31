@@ -25,6 +25,7 @@ def resolve_stages(db, definitions: list[dict]) -> list[dict]:
 
 def create_execution(db, body, config_override: dict | None = None) -> Task:
     if config_override is None:
+        workflow=None
         if body.stages is not None:
             definitions = [s.model_dump() for s in body.stages]
         else:
@@ -33,14 +34,18 @@ def create_execution(db, body, config_override: dict | None = None) -> Task:
                 raise ValueError('Workflow not found')
             definitions = workflow.definition['stages']
         stages = resolve_stages(db,definitions)
-        pool = [agent_snapshot(db,r.agent_id,r.version) for r in body.recovery_pool]
+        refs=body.recovery_pool
+        if workflow and 'recovery_pool' not in body.model_fields_set and workflow.definition.get('recovery_pool') is not None:
+            from backend.schemas import AgentRef
+            refs=[AgentRef.model_validate(r) for r in workflow.definition['recovery_pool']]
+        pool = [agent_snapshot(db,r.agent_id,r.version) for r in refs]
         config = body.model_dump(mode='json',exclude={'prompt','stages','recovery_pool'})
         config.update(stages=stages,recovery_pool=pool)
         config['failure']['stage_index'] = body.failure.stage_index if body.failure.stage_index is not None else min(1,len(stages)-1)
         if config['failure']['stage_index'] >= len(stages):
             raise ValueError('Failure stage is outside the workflow')
         # Reserve the maximum recovery allocation before deciding stage payouts.
-        config['stage_payout'] = str(min(Decimal('1'),(Decimal('4.50')-body.recovery_budget)/len(stages)).quantize(Decimal('.01'),rounding=ROUND_DOWN))
+        config['stage_payout'] = str(min(Decimal('1'),(body.task_budget-Decimal('.50')-body.recovery_budget)/len(stages)).quantize(Decimal('.01'),rounding=ROUND_DOWN))
     else:
         config = deepcopy(config_override)
     task = Task(prompt=body.prompt)
@@ -48,7 +53,7 @@ def create_execution(db, body, config_override: dict | None = None) -> Task:
     db.add(task)
     db.flush()
     db.add(Execution(task_id=task.id,configuration=config))
-    fund(db,task.id)
+    fund(db,task.id,config.get('task_budget','5.00'))
     db.add(Event(task_id=task.id,type='TASK_CREATED',message='Versioned workflow snapshot persisted'))
     if config['failure']['scenario'] != 'normal':
         import json
@@ -60,7 +65,7 @@ def execution_report(db, task_id: str) -> dict:
     task = db.get(Task,task_id)
     execution = db.get(Execution,task_id)
     attempts = list(db.scalars(select(Attempt).where(Attempt.task_id==task_id).order_by(Attempt.started_at)))
-    return {'task_id':task_id,'status':task.status,'configuration':execution.configuration if execution else None,
+    return {'task_id':task_id,'prompt':task.prompt,'status':task.status,'configuration':execution.configuration if execution else None,
             'execution_seconds':execution.duration_seconds if execution else None,
             'output':task.result,'error':task.error,
             'output_valid':bool(task.result) and all(s.status=='COMPLETED' for s in task.stages),

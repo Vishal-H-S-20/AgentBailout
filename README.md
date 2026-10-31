@@ -1,12 +1,14 @@
 # AgentBailout
 
+The interface now has five pages: **Home, Build Pipeline, Run & Recover, Compare Results, Settings & History**. Start with Home → Run Quick Demo → Start Task. See [the beginner navigation guide](docs/WEBSITE_NAVIGATION.md) for provider setup and complete click-by-click instructions. Cost/Time/Balanced policies, simulated budgets and deadlines affect backend execution. Gemini and Ollama adapters are mock-tested; live provider verification requires configured services.
+
 Latest update: the critical injection/state repair, reference-inspired dashboard redesign and bounded Python/GitHub diagnostics are implemented. See [AgentBailout 3.0 repair and demo report](docs/AGENTBAILOUT3_REPAIR.md) for exact behavior, evidence and limits. Backend remains on port 8003; dashboard on 8501.
 
 **The Self-Healing Control Plane for AI Agents**
 
 Detect. Diagnose. Decide. Repair. Replace. Recover.
 
-Current checkpoint: Phase 4. Versioned agents execute ordered workflows under heartbeat and runtime monitoring. Baseline failures stop; protected failures trigger a bounded, economically governed compatible replacement. Tasks continue with preserved upstream results and settle a simulated ledger. Safe self-repair and cost/time optimization are Phase 5 work, not implemented yet.
+The current build extends the Phase 4 foundation with a five-page interface, working Cost/Time/Balanced selection, simulated budgets and deadline limits. Versioned agents execute ordered workflows under heartbeat monitoring. Baseline failures stop; protected failures trigger bounded compatible replacement. Tasks reuse upstream results and settle a simulated ledger. General configuration self-repair and validated fix reuse remain future work.
 
 ## Implemented
 
@@ -71,6 +73,6 @@ Migration v4 is additive and makes an online backup before upgrading existing fi
 
 ## Limits and roadmap
 
-All ledger allocations are simulations. Actual model costs are separate and unknown without grounded pricing. Offline research is a planning outline, not web research. Schema validation does not establish factual quality. Code is never executed. No tools are granted; agents requiring tools are ineligible. This is a local single-process sequential engine without authentication, a distributed queue or arbitrary DAG support. The nine-operation contract catalog is extensible in code.
+All ledger allocations are simulations. Actual model costs are separate and unknown without grounded pricing. Offline research is a planning outline, not web research. Schema validation does not establish factual quality. Generated/repository code is never executed; the advanced diagnostic tool runs only a fixed developer-authored program. Agents receive no tool grants. This is a local single-process sequential engine without authentication, a distributed queue or arbitrary DAG support. The nine-operation contract catalog is extensible in code.
 
-Phase 5 adds cost/time/balanced strategies, verified repairs and recovery memory. Phase 6 redesigns the UI. Phase 7 completes presentation documentation. Phase 8 validates and freezes the build. Stop at each requested checkpoint.
+The earlier phase roadmap remains useful for remaining work: generalized verified repairs and recovery memory, deeper visual polish, presentation documentation, then final validation/freeze. Basic strategy selection and the requested simplified pictorial UI are implemented now; full Phase 5–8 completion is not claimed.

@@ -1,5 +1,11 @@
 # Actual progress
 
+## Five-page navigation and pictorial UX — November 1, 2026 IST
+
+Replaced seven primary sections and repeated sidebar controls with Home, Build Pipeline, Run & Recover, Compare Results and Settings & History. Added one-click valid demo setup, one-screen task controls, icon-based pipeline/recovery steps, outcome chart, persistent browser drafts and a combined agent/provider/pool builder. Saved recovery choices now persist with workflow records. Previous code/repository tools remain in advanced settings.
+
+Connected Cost/Time/Balanced selection, configurable simulated budgets and enforced deadlines to the backend. Added Gemini/Ollama adapters plus real provider-test endpoints; credentials/services were unavailable for live model verification, so adapter integration uses explicit HTTP mocks. Existing offline/OpenAI behavior remains tested. 70 backend tests pass and the comprehensive five-page UI script passes. Native browser verification reached a real completed recovered task. Details: WEBSITE_NAVIGATION.md.
+
 ## AgentBailout 3.0 critical repair and dashboard upgrade — November 1, 2026 IST
 
 Reproduced duplicate preconfigured injection 409 and identified the misleading draft-vs-saved task configuration path. Added explicit new-task UUID selection, visible saved settings, preconfigured/manual modes, action eligibility guards, friendly backend-coded errors and serialized injection checks. Redesigned the existing Streamlit UI using the supplied visual references, verified in a browser, and saved Overview/recovery screenshots. Added persisted bounded Python runtime normalization and read-only GitHub/source syntax diagnostics.

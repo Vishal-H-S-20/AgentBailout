@@ -26,12 +26,13 @@ class FaultDefinition(BaseModel):
 class WorkflowCreate(BaseModel):
     name: str = Field(min_length=1,max_length=80)
     stages: list[StageDefinition] = Field(min_length=1,max_length=8)
+    recovery_pool: list[AgentRef] | None = Field(default=None,max_length=10)
 
 
 class AgentCreate(BaseModel):
     id: str = Field(pattern=r'^[a-zA-Z0-9_-]{1,80}$')
     name: str = Field(min_length=1,max_length=80)
-    provider: Literal['offline','openai'] = 'offline'
+    provider: Literal['offline','openai','gemini','ollama'] = 'offline'
     model: str = Field(default='deterministic-v1',min_length=1,max_length=120)
     system_instructions: str = Field(default='Perform the stage and return the declared JSON structure.',min_length=1,max_length=4000)
     capabilities: list[Operation] = Field(min_length=1,max_length=9)
@@ -43,7 +44,7 @@ class AgentCreate(BaseModel):
 
     @model_validator(mode='after')
     def real_model_required(self):
-        if self.provider=='openai' and self.model=='deterministic-v1':
+        if self.provider!='offline' and self.model=='deterministic-v1':
             raise ValueError('Choose an actual provider model identifier for an external agent')
         return self
 
@@ -66,6 +67,15 @@ class TaskCreate(BaseModel):
     recovery_budget: Decimal = Field(default=Decimal('1.00'),ge=0,le=4,decimal_places=2)
     stage_timeout: float = Field(default=10,ge=.1,le=120,allow_inf_nan=False)
     heartbeat_timeout: float = Field(default=3,ge=.1,le=30,allow_inf_nan=False)
+    optimization: Literal['cost','time','balanced'] = 'cost'
+    task_budget: Decimal = Field(default=Decimal('5.00'),ge=1,le=100,decimal_places=2)
+    deadline_seconds: float = Field(default=120,ge=.1,le=600,allow_inf_nan=False)
+
+    @model_validator(mode='after')
+    def allocations_fit(self):
+        if self.recovery_budget > self.task_budget-Decimal('.50'):
+            raise ValueError('Recovery allowance must leave at least $0.50 for reserve')
+        return self
 
     @field_validator('recovery_pool')
     @classmethod

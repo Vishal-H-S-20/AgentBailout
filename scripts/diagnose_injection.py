@@ -1,17 +1,11 @@
-"""Reproduce task-selection and injection responses through real widgets/API."""
-from pathlib import Path
+"""Capture current duplicate-fault error details using the supported API."""
 import httpx
-from streamlit.testing.v1 import AppTest
-
-app=AppTest.from_file(str(Path(__file__).resolve().parents[1]/'dashboard'/'app.py'),default_timeout=30).run()
-def widget(elements,label):
-    return next(e for e in elements if e.label==label)
-for scenario in ['normal','crash','crash']:
-    widget(app.selectbox,'Failure scenario').select(scenario).run()
-    widget(app.button,'Create task').click().run()
-    selected=widget(app.selectbox,'Task history').value
-    stored=app.session_state['selected']
-    run=httpx.get(f'http://127.0.0.1:8003/tasks/{selected}/execution').json()
-    print('SELECTED',selected,'CREATED',stored,'SCENARIO',run['configuration']['failure'],flush=True)
-    response=httpx.post(f'http://127.0.0.1:8003/tasks/{selected}/inject-failure',json={'scenario':'crash','stage_index':1})
-    print('INJECT RESPONSE',response.status_code,response.text,flush=True)
+with httpx.Client(base_url="http://127.0.0.1:8003",timeout=10) as client:
+    response=client.post("/tasks",json={"prompt":"Inspect controlled fault persistence","failure":{"scenario":"crash","stage_index":1}})
+    response.raise_for_status()
+    identity=response.json()["id"]
+    result=client.post(f"/tasks/{identity}/inject-failure",json={"scenario":"crash","stage_index":1})
+    print("Task:",identity)
+    print("Expected duplicate rejection:",result.status_code,result.text)
+    assert result.status_code==409
+    assert result.json()["detail"]["code"]=="FAULT_ALREADY_CONFIGURED"

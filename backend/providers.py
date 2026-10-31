@@ -91,4 +91,68 @@ def provider(name: str) -> AgentProvider:
         return OfflineProvider()
     if name == 'openai':
         return OpenAIProvider()
+    if name == 'gemini':
+        return GeminiProvider()
+    if name == 'ollama':
+        return OllamaProvider()
     raise ProviderFailure('CONFIGURATION_ERROR','Unsupported provider')
+
+
+class GeminiProvider(OpenAIProvider):
+    def validate_configuration(self, config: dict) -> None:
+        if not os.getenv('GEMINI_API_KEY') or not config.get('model'):
+            raise ProviderFailure('CONFIGURATION_ERROR','Gemini requires GEMINI_API_KEY and a model identifier')
+
+    def get_health(self, config: dict) -> dict:
+        return {'status':'configured_unverified' if os.getenv('GEMINI_API_KEY') and config.get('model') else 'unavailable','execution_mode':'external_llm','verified_connection':False}
+
+    async def execute(self, config: dict, operation: str, data: dict, schema: dict) -> ProviderResult:
+        from urllib.parse import quote
+        self.validate_configuration(config)
+        return await self._request('https://generativelanguage.googleapis.com/v1beta/models/'+quote(config['model'],safe='')+':generateContent',
+            {'x-goog-api-key':os.environ['GEMINI_API_KEY']},
+            {'systemInstruction':{'parts':[{'text':config['system_instructions']+'\nStage: '+operation}]},
+             'contents':[{'role':'user','parts':[{'text':json.dumps(data)}]}],
+             'generationConfig':{'maxOutputTokens':2000,'responseFormat':{'text':{'mimeType':'application/json','schema':schema}}}},False)
+
+    async def _request(self,url: str,headers: dict,payload: dict,local: bool) -> ProviderResult:
+        try:
+            async with httpx.AsyncClient(transport=self.transport,timeout=60,trust_env=False) as client:
+                response=await client.post(url,headers=headers,json=payload)
+            if response.status_code>=400:
+                raise ProviderFailure('RATE_LIMIT' if response.status_code==429 else 'MODEL_FAILURE',f'Provider returned HTTP {response.status_code}')
+            result=response.json()
+            if local:
+                if not result.get('done') or result.get('done_reason')=='length':
+                    raise ProviderFailure('MODEL_FAILURE','Ollama response was incomplete')
+                output=json.loads(result['message']['content'])
+                usage={'input_tokens':result.get('prompt_eval_count'),'output_tokens':result.get('eval_count')}
+            else:
+                candidate=result['candidates'][0]
+                if candidate.get('finishReason')!='STOP':
+                    raise ProviderFailure('MODEL_FAILURE','Gemini response was incomplete or blocked')
+                output=json.loads(''.join(p['text'] for p in candidate['content']['parts'] if 'text' in p))
+                usage=result.get('usageMetadata')
+            return ProviderResult(output,usage=usage,api_cost=None)
+        except httpx.TimeoutException:
+            raise ProviderFailure('TIMEOUT','Provider request timed out') from None
+        except httpx.HTTPError:
+            raise ProviderFailure('MODEL_FAILURE','Provider connection failed') from None
+        except (ValueError,KeyError,TypeError,IndexError,AttributeError):
+            raise ProviderFailure('INVALID_OUTPUT','Provider returned invalid structured data') from None
+
+
+class OllamaProvider(GeminiProvider):
+    def validate_configuration(self, config: dict) -> None:
+        if not config.get('model'):
+            raise ProviderFailure('CONFIGURATION_ERROR','Choose an installed Ollama model')
+
+    def get_health(self,config: dict) -> dict:
+        return {'status':'configured_unverified' if config.get('model') else 'unavailable','execution_mode':'local_llm','verified_connection':False}
+
+    async def execute(self,config: dict,operation: str,data: dict,schema: dict) -> ProviderResult:
+        self.validate_configuration(config)
+        return await self._request(os.getenv('OLLAMA_URL','http://127.0.0.1:11434').rstrip('/')+'/api/chat',{},
+            {'model':config['model'],'stream':False,'format':schema,'options':{'num_predict':2000},
+             'messages':[{'role':'system','content':config['system_instructions']+'\nStage: '+operation},
+                         {'role':'user','content':json.dumps(data)}]},True)

@@ -14,9 +14,9 @@ def transfer(db, task_id: str, reference: str, source: str, destination: str, am
                            description=f'{source} → {destination} (simulation)'))
 
 
-def fund(db, task_id: str) -> None:
-    transfer(db, task_id, 'funding', 'client', 'escrow', '5.00', 'ESCROW_LOCKED')
-    db.add(Event(task_id=task_id, type='ESCROW_LOCKED', message='Simulated $5.00 budget funded'))
+def fund(db, task_id: str, amount: str = '5.00') -> None:
+    transfer(db, task_id, 'funding', 'client', 'escrow', amount, 'ESCROW_LOCKED')
+    db.add(Event(task_id=task_id, type='ESCROW_LOCKED', message=f'Simulated ${amount} budget funded'))
 
 
 def settle(db, task) -> bool:
@@ -27,8 +27,8 @@ def settle(db, task) -> bool:
     # Unique task primary key fences duplicate settlement; all writes share caller transaction.
     db.add(Settlement(task_id=task.id, outcome=task.status))
     db.flush()
-    remaining = Decimal('5.00')
     execution = db.get(Execution,task.id)
+    remaining = Decimal(execution.configuration.get('task_budget','5.00')) if execution else Decimal('5.00')
     def pay(account: str, amount: str):
         nonlocal remaining
         value = Decimal(amount)

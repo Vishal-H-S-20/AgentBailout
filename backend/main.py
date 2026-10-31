@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select, text
+from jsonschema import ValidationError
 from backend.database import Base, engine, SessionLocal
 from backend.models import Task, Stage, Event, Agent, Workflow, Execution, Comparison
 from backend.schemas import TaskCreate, TaskView, EventView, FaultDefinition, AgentCreate, WorkflowCreate
@@ -39,7 +40,7 @@ def create_app(db_engine=engine, factory=SessionLocal) -> FastAPI:
             job.cancel()
         await asyncio.gather(*jobs, return_exceptions=True)
 
-    app = FastAPI(title='AgentBailout', version='0.4.1', lifespan=lifespan)
+    app = FastAPI(title='AgentBailout', version='0.5.0', lifespan=lifespan)
 
     @app.exception_handler(IntegrityError)
     async def conflict(request, exc):
@@ -56,7 +57,7 @@ def create_app(db_engine=engine, factory=SessionLocal) -> FastAPI:
     def health():
         with factory() as db:
             db.execute(select(1))
-        return {'status': 'ok', 'phase': 4, 'version':'0.4.1'}
+        return {'status': 'ok', 'phase': 4, 'version':'0.5.0'}
 
     @app.post('/tasks', response_model=TaskView, status_code=201)
     def create_task(body: TaskCreate):
@@ -150,6 +151,7 @@ def create_app(db_engine=engine, factory=SessionLocal) -> FastAPI:
             from backend.models import LedgerEntry
             expenses = list(db.scalars(select(LedgerEntry).where(LedgerEntry.account.in_(['backup_expense','recovery_overhead']))))
             return {'tasks_processed':sum(t.status in {'COMPLETED','FAILED'} for t in tasks),
+                    'total_workflow_executions':len(tasks),
                     'failures_detected':failures,'successful_recoveries':recovered,
                     'recovery_success_rate':recovered/failures if failures else 0,
                     'average_recovery_seconds':sum(durations)/len(durations) if durations else 0,
@@ -186,6 +188,10 @@ def create_app(db_engine=engine, factory=SessionLocal) -> FastAPI:
         with factory.begin() as db:
             try:
                 resolve_stages(db,[s.model_dump() for s in body.stages])
+                if body.recovery_pool is not None:
+                    from backend.registry import agent_snapshot
+                    for ref in body.recovery_pool:
+                        agent_snapshot(db,ref.agent_id,ref.version)
             except ValueError as exc:
                 raise HTTPException(422,str(exc)) from None
             row = Workflow(definition=body.model_dump())
@@ -250,13 +256,52 @@ def create_app(db_engine=engine, factory=SessionLocal) -> FastAPI:
             delta = None if baseline['execution_seconds'] is None or protected['execution_seconds'] is None else protected['execution_seconds']-baseline['execution_seconds']
             allocations = []
             for run in [baseline,protected]:
-                allocations.append(Decimal('5.00')-Decimal(run['ledger']['balances'].get('client_refund','0')) if run['ledger']['settled'] else None)
+                allocations.append(Decimal(run['configuration'].get('task_budget','5.00'))-Decimal(run['ledger']['balances'].get('client_refund','0')) if run['ledger']['settled'] else None)
             return {'id':pair.id,'baseline':baseline,'protected':protected,'time_difference_seconds':delta,
                     'simulated_allocation_difference':str(allocations[1]-allocations[0]) if all(a is not None for a in allocations) else None,
                     'api_cost_difference':str(Decimal(protected['api_cost'])-Decimal(baseline['api_cost'])) if baseline['api_cost'] is not None and protected['api_cost'] is not None else None,
                     'note':'Sequential controlled runs with frozen agent versions and identical fault; external LLM outputs can vary. Positive time difference means protection took longer.'}
 
     from backend.diagnostics import DiagnosticRequest, diagnose
+
+    class ConnectionRequest(BaseModel):
+        provider: Literal['offline','openai','gemini','ollama']
+        model: str
+
+    @app.get('/providers')
+    def providers():
+        import os
+        from backend.providers import provider
+        with factory() as db:
+            versions=list(db.scalars(select(Agent)))
+            result=[]
+            for name in ['offline','openai','gemini','ollama']:
+                models=[a.configuration['model'] for a in versions if a.configuration['provider']==name]
+                model=os.getenv(name.upper()+'_MODEL',models[-1] if models else 'deterministic-v1' if name=='offline' else '')
+                result.append({'provider':name,'model':model,**provider(name).get_health({'model':model})})
+            return result
+
+    @app.post('/providers/test')
+    async def test_connection(body: ConnectionRequest):
+        from backend.providers import provider, ProviderFailure
+        from backend.contracts import validate
+        if not body.model or len(body.model)>120 or 'sk-' in body.model:
+            raise HTTPException(422,'Choose a valid model identifier; credentials belong in the backend environment')
+        schema={'type':'object','properties':{'ok':{'type':'boolean'}},'required':['ok'],'additionalProperties':False}
+        if body.provider=='offline':
+            return {'connected':True,'provider':'offline','message':'Offline simulation is ready; no model call was made.'}
+        try:
+            response=await asyncio.wait_for(provider(body.provider).execute({'model':body.model,'system_instructions':'Connection test. Return {"ok":true}.'},'connection_test',{'request':'Return ok true'},schema),timeout=15)
+            validate(response.output,schema)
+            if response.output['ok'] is not True:
+                raise ValueError('Connection test response did not confirm readiness')
+            return {'connected':True,'provider':body.provider,'model':body.model,'usage':response.usage,'message':'A real model request completed and its output was validated.'}
+        except ProviderFailure as exc:
+            raise HTTPException(422,str(exc)) from None
+        except TimeoutError:
+            raise HTTPException(422,'Provider connection test timed out') from None
+        except (ValueError,ValidationError):
+            raise HTTPException(422,'Model response did not match the connection-test contract') from None
 
     @app.post('/diagnostics',status_code=201)
     async def diagnostics(body: DiagnosticRequest):

@@ -75,7 +75,8 @@ async def attempt(factory, task_id: str, stage_id: str, agent: dict, operation: 
     try:
         from backend.watchdog import monitor
         try:
-            output = await asyncio.wait_for(monitor(worker,heartbeat,config['heartbeat_timeout']),timeout=config['stage_timeout'])
+            timeout=max(.001,min(config['stage_timeout'],config.get('_deadline',float('inf'))-monotonic()))
+            output = await asyncio.wait_for(monitor(worker,heartbeat,config['heartbeat_timeout']),timeout=timeout)
         except TimeoutError:
             raise ProviderFailure('TIMEOUT','Worker heartbeat expired' if fault=='heartbeat_loss' else 'Stage execution deadline expired') from None
         return output
@@ -130,13 +131,17 @@ async def recover(factory, task_id: str, stage_id: str, definition: dict, data: 
         ok, reason = compatible(candidate,definition['operation'])
         if candidate['estimated_latency'] > config['stage_timeout']:
             ok,reason = False,'Estimated candidate latency exceeds stage runtime limit'
+        if candidate['estimated_latency'] > config.get('_deadline',float('inf'))-monotonic():
+            ok,reason = False,'Candidate cannot fit the remaining task deadline'
         if candidate['id']==definition['agent']['id']:
             ok,reason = False,'Same agent identity as failed primary'
         if mode=='no_backup':
             ok,reason = False,'Controlled absence of eligible backups'
         candidates.append({'agent':candidate,'eligible':ok,'reason':reason})
     eligible = [c['agent'] for c in candidates if c['eligible']]
-    eligible.sort(key=lambda a:(Decimal(a['estimated_cost']),-Decimal(a['selection_reliability']),a['id'],a['version']))
+    from backend.policy import rank_candidates
+    strategy=config.get('optimization','cost')
+    eligible=rank_candidates(eligible,strategy)
     event(factory,task_id,'RECOVERY_CANDIDATES',json.dumps([{'id':c['agent']['id'],'version':c['agent']['version'],
           'eligible':c['eligible'],'reason':c['reason'],'estimated_cost':c['agent']['estimated_cost']} for c in candidates]))
     if not eligible:
@@ -153,7 +158,8 @@ async def recover(factory, task_id: str, stage_id: str, definition: dict, data: 
         if count >= config['max_attempts']:
             break
         cost = '3.00' if mode=='expensive' else candidate['estimated_cost']
-        decision = evaluate(cost)
+        decision = evaluate(cost,config.get('task_budget','5.00'),candidate['selection_reliability'])
+        decision.update(strategy=strategy,estimated_seconds=candidate['estimated_latency'])
         if mode=='insufficient_budget' or spent+Decimal(decision['total_rescue_cost'])>Decimal(config['recovery_budget']):
             decision.update(approved=False,reason='Remaining simulated recovery budget is insufficient')
         event(factory,task_id,'RESCUE_EVALUATED',json.dumps(decision))
@@ -165,7 +171,7 @@ async def recover(factory, task_id: str, stage_id: str, definition: dict, data: 
             stage.recovery_attempts += 1
             stage.worker_id = candidate['id']+'-v'+str(candidate['version'])
         event(factory,task_id,'RESCUE_APPROVED',decision['reason'])
-        event(factory,task_id,'BACKUP_SELECTED',json.dumps({'id':candidate['id'],'version':candidate['version'],'rule':'Lowest simulated cost, highest prior reliability, then ID/version'}))
+        event(factory,task_id,'BACKUP_SELECTED',json.dumps({'id':candidate['id'],'version':candidate['version'],'rule':f'{strategy.title()} policy: expected cost/time estimates and observed/prior reliability; compatible within budget and deadline'}))
         event(factory,task_id,'BACKUP_STARTED',candidate['id'])
         backup_fault = 'shared_failure' if mode=='shared_failure' else 'crash' if mode in {'backup_failure','exhausted'} else 'normal'
         try:
@@ -194,11 +200,14 @@ async def execute(factory, task_id: str) -> None:
         with factory.begin() as db:
             execution = db.get(Execution,task_id)
             execution.started_at = now()
-            config = execution.configuration
+            config = dict(execution.configuration)
+            config['_deadline']=started+config.get('deadline_seconds',120)
             task = db.get(Task,task_id)
             data = {'prompt':task.prompt}
             stage_ids = [s.id for s in task.stages]
         for index,(stage_id,definition) in enumerate(zip(stage_ids,config['stages'])):
+            if monotonic()>=config['_deadline']:
+                raise ProviderFailure('DEADLINE_EXCEEDED','Task deadline expired')
             active_id = stage_id
             stage_start = monotonic()
             with factory.begin() as db:
@@ -206,16 +215,20 @@ async def execute(factory, task_id: str) -> None:
                 stage.status,stage.started_at,stage.input = 'RUNNING',now(),data
                 stage.worker_id = definition['agent']['id']+'-v'+str(definition['agent']['version'])
                 db.add(Event(task_id=task_id,type='AGENT_STARTED',message=stage.name))
-            await asyncio.sleep(STAGE_SECONDS)
+            await asyncio.sleep(min(STAGE_SECONDS,max(0,config['_deadline']-monotonic())))
+            remaining=config['_deadline']-monotonic()
+            if remaining<=0:
+                raise ProviderFailure('DEADLINE_EXCEEDED','Task deadline expired before stage execution')
+            stage_config={**config,'stage_timeout':min(config['stage_timeout'],remaining)}
             # Read fresh fault configuration to support injection into a running pending stage.
             with factory() as db:
                 current = db.get(Execution,task_id).configuration
                 fault = current['failure']
             mode = fault['scenario'] if fault['stage_index']==index else 'normal'
             try:
-                output = await attempt(factory,task_id,stage_id,definition['agent'],definition['operation'],data,config,False,mode)
+                output = await attempt(factory,task_id,stage_id,definition['agent'],definition['operation'],data,stage_config,False,mode)
             except ProviderFailure as exc:
-                output = await recover(factory,task_id,stage_id,definition,data,config,exc,mode)
+                output = await recover(factory,task_id,stage_id,definition,data,stage_config,exc,mode)
             data = output
             with factory.begin() as db:
                 stage = db.get(Stage,stage_id)
