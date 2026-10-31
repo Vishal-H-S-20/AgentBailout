@@ -1,55 +1,74 @@
 # AgentBailout
 
-Phase 3 dashboard and simulated ledger are now implemented. See [Phase 3 run/demo instructions](docs/PHASE3.md) and [accounting policy](docs/ECONOMIC_MODEL.md). The historical Phase 1 notes below describe the initial foundation; Phase 3 uses backend port 8003 and dashboard port 8501.
+**The Self-Healing Control Plane for AI Agents**
 
-Autonomous Recovery & Liquidity Layer for Multi-Agent Workflows.
+Detect. Diagnose. Decide. Repair. Replace. Recover.
 
-The persistent Research → Formatter → Synthesis pipeline supports formatter crash and heartbeat-loss rescue, economic decisions, backup execution, simulated settlement and refunds. Research produces a deterministic planning outline derived from the user's topic, not externally verified facts. All financial records are simulations.
+Current checkpoint: Phase 4. Versioned agents execute ordered workflows under heartbeat and runtime monitoring. Baseline failures stop; protected failures trigger a bounded, economically governed compatible replacement. Tasks continue with preserved upstream results and settle a simulated ledger. Safe self-repair and cost/time optimization are Phase 5 work, not implemented yet.
 
-## Windows setup
+## Implemented
 
-Run from the repository root with Python 3.11 or later:
+- Three templates: Research → Format → Summarize; Plan → Code → Validate; Extract → Transform → Review.
+- Database-backed agent registry, immutable versions, ordered workflow builder and selected recovery pool.
+- Actual backend protection ON/OFF and baseline/protected comparison using frozen configurations and equivalent controlled faults.
+- Crash, heartbeat loss, runtime timeout, invalid output and other controlled fault scenarios.
+- Contract validation, compatibility checks, bounded recovery, repeated-failure circuit breaking, cancellation fencing and persistent attempts.
+- Simulated double-entry settlement, budget limits, idempotent settlement, refunds and measured metrics.
+- Streamlit dashboard with workflow controls, registry, comparison panels, events, ledger and output.
+- OpenAI Responses adapter with structured output and token usage. **Live provider execution is unverified: no API key or model was configured.** Mock HTTP and engine integration are tested. Offline runs are clearly labeled deterministic simulations.
+
+## Windows startup
+
+From the repository root with Python 3.11+:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m pytest -q
-.\.venv\Scripts\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+$env:AGENTBAILOUT_DATABASE_URL='sqlite:///./phase3-demo.db'
+.\.venv\Scripts\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8003
 ```
 
-In a second terminal, from this same directory:
+On this workstation use `.\.python\python.exe` if the system python command resolves to the broken Store alias. In another terminal:
 
 ```powershell
-.\scripts\demo.ps1
+$env:AGENTBAILOUT_BACKEND_URL='http://127.0.0.1:8003'
+.\.venv\Scripts\python.exe -m streamlit run dashboard/app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true
 ```
 
-## Ubuntu setup
+Open [Dashboard](http://127.0.0.1:8501) or [API docs](http://127.0.0.1:8003/docs). Select a template and crash, then Compare Both in Comparison Lab. No paid service is required for offline execution. To use real agents set OPENAI_API_KEY only in the backend environment, restart, register an OpenAI agent with an actual accessible model identifier, and select it. `.env.example` is documentation, not automatically loaded.
+
+## Ubuntu startup
 
 ```bash
 bash scripts/setup.sh
-bash scripts/run_tests.sh
-bash scripts/run_backend.sh
+export AGENTBAILOUT_DATABASE_URL=sqlite:///./phase3-demo.db
+.venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8003
+# Separate terminal, same repository root:
+export AGENTBAILOUT_BACKEND_URL=http://127.0.0.1:8003
+.venv/bin/python -m streamlit run dashboard/app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true
 ```
 
-Visit http://127.0.0.1:8000/docs for interactive request and response schemas. Create a task with `POST /tasks` using `{"prompt":"Plan a community garden"}`, copy its ID, then call `POST /tasks/{id}/start`. Poll `GET /tasks/{id}` until `COMPLETED`; inspect `result` and `stages`. Inspect `GET /tasks/{id}/events` for stage order.
+Ubuntu commands were not executed on this Windows host. Run one backend process per database.
 
-## API
+## Verify
 
-| Endpoint | Behavior |
-| --- | --- |
-| GET /health | Database connectivity check |
-| POST /tasks | Persist task and three pending stages; 201 |
-| GET /tasks | Most recent 100 tasks |
-| GET /tasks/{id} | Status, stage inputs/outputs, final result |
-| POST /tasks/{id}/start | Start once; 202, repeated starts 409 |
-| GET /tasks/{id}/events | Persisted events in insertion order |
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q --basetemp=.verified-tests-phase4
+.\.venv\Scripts\python.exe scripts/demo_phase4.py
+.\.venv\Scripts\python.exe scripts/verify_dashboard.py
+.\.venv\Scripts\python.exe scripts/verify_phase4_dashboard.py
+```
 
-Unknown task IDs return 404; invalid input returns 422. SQLite defaults to `agentbailout.db` in the working directory. Set `AGENTBAILOUT_DATABASE_URL` and `AGENTBAILOUT_STAGE_SECONDS` through environment variables; `.env` is an example, not automatically loaded.
+The last three require backend port 8003. Tests use temporary databases. See [Phase 4 guide](docs/PHASE4.md) and [test report](docs/PHASE4_TEST_REPORT.md) for results and measured live timings.
 
-## Architecture and limits
+## API and persistence
 
-FastAPI validates requests, SQLAlchemy persists tasks/stages/events, and the supervisor schedules async execution. Each stage consumes its predecessor's stored structured output. UTC timestamps and unique worker IDs provide traceability. An atomic conditional update prevents duplicate starts. Use one Uvicorn process: this is a local MVP, not a distributed queue. SQLite calls are synchronous and suitable only for this low-volume demo.
+Existing health, tasks, start, injection, events, ledger, workers and metrics endpoints remain. New: GET/POST /agents, GET/POST /workflows, GET /tasks/{id}/execution, POST/GET /comparisons and GET /comparisons/{id}. Backend /docs defines exact schemas. Invalid inputs/contracts return 422, unknown IDs 404, duplicate lifecycle operations 409.
 
-Shutdown cancels running jobs and marks them failed. On startup, persisted RUNNING tasks are marked FAILED rather than silently rerun. Create a new task after interruption. Completed results survive restarts. Periodic heartbeat monitoring, automatic rescue and settlement are not implemented in Phase 1. Tests use temporary databases.
+Migration v4 is additive and makes an online backup before upgrading existing file databases. Existing results/journals remain intact. Interrupted executions fail safely and settle funded balances once; work is not silently replayed. Git excludes databases, backups, credentials, virtual environments and installers.
 
-Next: Phase 4 stability work and the documented remaining detection/registry improvements.
+## Limits and roadmap
+
+All ledger allocations are simulations. Actual model costs are separate and unknown without grounded pricing. Offline research is a planning outline, not web research. Schema validation does not establish factual quality. Code is never executed. No tools are granted; agents requiring tools are ineligible. This is a local single-process sequential engine without authentication, a distributed queue or arbitrary DAG support. The nine-operation contract catalog is extensible in code.
+
+Phase 5 adds cost/time/balanced strategies, verified repairs and recovery memory. Phase 6 redesigns the UI. Phase 7 completes presentation documentation. Phase 8 validates and freezes the build. Stop at each requested checkpoint.

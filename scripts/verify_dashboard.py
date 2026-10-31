@@ -9,13 +9,17 @@ def button(app, label):
     return next(b for b in app.button if b.label == label)
 
 
+def selectbox(app, label):
+    return next(s for s in app.selectbox if s.label == label)
+
+
 for scenario in ['normal', 'crash', 'expensive']:
     app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / 'dashboard' / 'app.py'), default_timeout=20).run()
     assert not app.exception
-    app.selectbox[0].select(scenario).run()
+    selectbox(app,'Failure scenario').select(scenario).run()
     button(app,'Create task').click().run()
     assert not app.exception
-    task_id = app.selectbox[1].value
+    task_id = selectbox(app,'Task history').value
     button(app,'Start task').click().run()
     deadline = time.monotonic()+10
     while time.monotonic()<deadline:

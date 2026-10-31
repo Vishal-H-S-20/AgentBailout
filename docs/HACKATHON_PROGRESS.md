@@ -1,5 +1,13 @@
 # Actual progress
 
+## Phase 4 — configurable workflows and universal replacement verified
+
+Preserved Phase 3 commit 6438d16 with tag phase3-working-6438d16. Added versioned database agent registry, three templates, saved/ordered workflows, immutable execution snapshots, offline/OpenAI provider abstraction, all-stage watchdog/runtime limits, universal compatible replacement pool, actual backend protection toggle, controlled baseline/protected comparison, per-attempt usage/history, repeated-failure stop and additive backed-up database migration. Extended settlement to arbitrary supported stage counts and bounded replacement expenses. Dashboard exposes builder, registry, pool, protection and comparison controls.
+
+Final suite: 48 passed in 27.18 seconds, one upstream deprecation warning. Live HTTP coding comparison: baseline FAILED in 1.250s, protected COMPLETED in 2.032s, both balanced/settled. Dashboard callbacks verified original normal/rescue/rejection plus workflow save and paired comparison. Backend health phase=4 and frontend HTTP 200 verified. No live provider call: credentials/model absent; adapter and full engine path tested through HTTP mocks only. Detailed evidence and limitations are in PHASE4_TEST_REPORT.md and PHASE4.md.
+
+Phase 4 checkpoint reached. Cost/time optimization, safe repair, persistent fix reuse and premium UI remain Phases 5–6. Await CONTINUE PHASE 5.
+
 ## Phase 3 — dashboard and settlement verified
 
 Implemented dark Streamlit dashboard with task creation, start, failure selection/injection, history, auto/manual refresh, directional workflow graph, decision details, events, ledger chart/journal, metrics and final output. Added simulated double-entry ledger, atomic terminal settlement, unique per-task settlement marker, refunds, ledger API and metrics API.

@@ -66,3 +66,60 @@ class LedgerEntry(Base):
     credit_cents: Mapped[int]
     description: Mapped[str]
     timestamp: Mapped[str] = mapped_column(default=now)
+
+
+class Agent(Base):
+    __tablename__ = 'agents'
+    id: Mapped[str] = mapped_column(primary_key=True)
+    version: Mapped[int] = mapped_column(primary_key=True)
+    configuration: Mapped[dict] = mapped_column(JSON)
+    successes: Mapped[int] = mapped_column(default=0)
+    failures: Mapped[int] = mapped_column(default=0)
+    timeouts: Mapped[int] = mapped_column(default=0)
+    total_seconds: Mapped[float] = mapped_column(default=0)
+    recovery_involvement: Mapped[int] = mapped_column(default=0)
+    last_execution_at: Mapped[str | None] = mapped_column(nullable=True)
+
+
+class Workflow(Base):
+    __tablename__ = 'workflows'
+    id: Mapped[str] = mapped_column(primary_key=True, default=lambda: str(uuid4()))
+    definition: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[str] = mapped_column(default=now)
+
+
+class Execution(Base):
+    __tablename__ = 'executions'
+    task_id: Mapped[str] = mapped_column(ForeignKey('tasks.id'), primary_key=True)
+    configuration: Mapped[dict] = mapped_column(JSON)
+    started_at: Mapped[str | None] = mapped_column(nullable=True)
+    ended_at: Mapped[str | None] = mapped_column(nullable=True)
+    duration_seconds: Mapped[float | None] = mapped_column(nullable=True)
+
+
+class Attempt(Base):
+    __tablename__ = 'attempts'
+    id: Mapped[str] = mapped_column(primary_key=True, default=lambda: str(uuid4()))
+    task_id: Mapped[str] = mapped_column(ForeignKey('tasks.id'), index=True)
+    stage_id: Mapped[str] = mapped_column(ForeignKey('stages.id'), index=True)
+    agent_id: Mapped[str]
+    agent_version: Mapped[int]
+    recovery: Mapped[bool]
+    status: Mapped[str] = mapped_column(default='RUNNING')
+    started_at: Mapped[str] = mapped_column(default=now)
+    ended_at: Mapped[str | None] = mapped_column(nullable=True)
+    duration_seconds: Mapped[float | None] = mapped_column(nullable=True)
+    error_category: Mapped[str | None] = mapped_column(nullable=True)
+    error_fingerprint: Mapped[str | None] = mapped_column(nullable=True)
+    usage: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    api_cost: Mapped[str | None] = mapped_column(nullable=True)
+    simulated_cost: Mapped[str] = mapped_column(default='0.00')
+    output_valid: Mapped[bool] = mapped_column(default=False)
+
+
+class Comparison(Base):
+    __tablename__ = 'comparisons'
+    id: Mapped[str] = mapped_column(primary_key=True, default=lambda: str(uuid4()))
+    baseline_id: Mapped[str] = mapped_column(ForeignKey('tasks.id'))
+    protected_id: Mapped[str] = mapped_column(ForeignKey('tasks.id'))
+    created_at: Mapped[str] = mapped_column(default=now)

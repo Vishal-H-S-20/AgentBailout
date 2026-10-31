@@ -1,5 +1,7 @@
 # Simulated accounting
 
+Phase 4 extends this policy to configurable workflows. Per-stage payouts reserve the recovery budget before execution. Every started backup attempt incurs its recorded simulated estimate and $0.05 overhead. See [Phase 4 accounting](PHASE4.md#accounting). The examples below remain valid for default three-stage runs. Actual external API costs are separate and unknown without grounded pricing.
+
 All balances are demo allocations, not money, escrow custody or blockchain assets. New API tasks receive a fixed $5.00 simulated budget. Funding debits client and credits escrow. Each transfer has equal debit and credit entries, stored as integer cents; all calculations use Decimal. Account balances here use credit minus debit, so the source client account is negative.
 
 On completion each completed primary stage earns $1.00. A formatter replaced by a backup receives no primary payout. An attempted backup costs $0.25 and recovery overhead $0.05, including when the backup fails. Successful tasks allocate $0.50 to reserve. Everything left is credited to client_refund. Failed tasks pay only completed primary stages and attempted recovery costs; no reserve is allocated. No worker stakes or penalties are implemented.
