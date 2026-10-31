@@ -1,0 +1,13 @@
+.venv/
+.python/
+python-installer.exe
+__pycache__/
+.pytest_cache/
+.test-tmp/
+.test-tmp2/
+.verified-tests/
+.verified-tests*/
+*.log
+*.db
+*.db-*
+.env

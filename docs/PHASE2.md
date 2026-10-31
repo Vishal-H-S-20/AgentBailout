@@ -1,0 +1,11 @@
+# Phase 2
+
+Run `.venv\Scripts\python.exe -m uvicorn backend.main:app --port 8002` from the repository root. Use http://127.0.0.1:8002/docs to create a task, inject `{"scenario":"crash"}` through POST /tasks/{id}/inject-failure, start it, and inspect task detail and events. Other supported scenarios: heartbeat_loss, backup_failure, expensive, no_backup. Injection is accepted once before formatter completion.
+
+`watchdog.py` polls the primary coroutine without blocking and expires missing heartbeats after three seconds. A crash raises an exception; heartbeat loss suspends execution until the watchdog cancels and awaits the primary. This prevents stale output. `recovery.py` uses saved research input, makes one bounded recovery attempt and runs the deterministic formatter as a backup identity. Completed research is not rerun.
+
+Economic policy: Decimal backup cost 0.25 + overhead 0.05 = 0.30, divided by simulated task value 5.00 = 6%. Policy ceiling is 40%; expected net benefit is 0.95 × 5.00 − 0.30 = 4.45. The probability is a simulated estimate. Each decision is persisted as JSON in RESCUE_EVALUATED events. No money is moved.
+
+Current limits: one fixed backup identity rather than a configurable ranked worker registry; economics use fixed demo values rather than request-configurable budgets. There is no separate elapsed-runtime timeout scenario yet. Periodic heartbeats currently cover the formatter; other stages retain start timestamps only. Funding and settlement are not implemented and must be added in Phase 3 before claiming financial integrity. No duplicate settlement is possible because settlement does not yet exist. One backend process only; do not run multiple servers against the same database.
+
+Verification: 10 tests passed in 7.32 seconds, with one upstream test-client deprecation warning. Tests cover normal completion, crash and heartbeat rescue, backup failure, high cost, no backup, duplicate injection/start, invalid inputs, persistence and economic boundaries. A live HTTP demonstration on port 8002 created task 52c1fb46-eb60-414a-9955-890609f3248a, injected crash and returned COMPLETED with final synthesis output. The integration tests additionally assert ordered recovery events and preserved upstream input.
