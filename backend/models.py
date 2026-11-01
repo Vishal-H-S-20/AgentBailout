@@ -130,3 +130,11 @@ class DiagnosticRun(Base):
     id: Mapped[str] = mapped_column(primary_key=True, default=lambda: str(uuid4()))
     report: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[str] = mapped_column(default=now)
+
+
+class AttemptEvidence(Base):
+    __tablename__ = 'attempt_evidence'
+    attempt_id: Mapped[str] = mapped_column(ForeignKey('attempts.id'),primary_key=True)
+    input: Mapped[dict] = mapped_column(JSON)
+    output: Mapped[dict | list | str | None] = mapped_column(JSON,nullable=True)
+    error_message: Mapped[str | None] = mapped_column(nullable=True)

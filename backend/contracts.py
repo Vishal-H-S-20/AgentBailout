@@ -23,6 +23,24 @@ TEMPLATES = {
     'coding': [('Plan','plan'),('Generate Code','code'),('Validate','validate')],
     'document': [('Extract Information','extract'),('Transform','transform'),('Review','review')]}
 
+CONTRACT_NAMES = [(PROMPT,'Task brief'),(RESEARCH,'Research findings'),(REPORT,'Formatted report'),
+                  (SUMMARY,'Final summary'),(DOCUMENT,'Working document')]
+OPERATION_NAMES={'research':'Research','format':'Format','summarize':'Summarize','plan':'Plan','code':'Generate Code','validate':'Validate','extract':'Extract','transform':'Transform','review':'Review'}
+
+
+def contract_name(schema: dict) -> str:
+    return next((name for expected,name in CONTRACT_NAMES if expected==schema),'Custom data')
+
+
+def compatible_operations(schema: dict) -> list[str]:
+    return [operation for operation,(required,_) in CONTRACTS.items() if required==schema]
+
+
+def catalog() -> dict:
+    return {operation:{'label':OPERATION_NAMES[operation],'input':contract_name(required),'output':contract_name(produced),
+                       'input_schema':required,'output_schema':produced,'next':compatible_operations(produced)}
+            for operation,(required,produced) in CONTRACTS.items()}
+
 
 def validate(data: dict, schema: dict) -> None:
     Draft202012Validator(schema).validate(data)

@@ -87,15 +87,21 @@ def fail(factory, task_id: str, stage_id: str | None, message: str) -> None:
         if stage_id:
             stage = db.get(Stage, stage_id)
             stage.status, stage.error, stage.ended_at = 'FAILED', message, now()
+            if stage.started_at:
+                from datetime import datetime
+                stage.duration_seconds=(datetime.fromisoformat(stage.ended_at)-datetime.fromisoformat(stage.started_at)).total_seconds()
         else:
             for stage in task.stages:
                 if stage.status == 'RUNNING':
                     stage.status, stage.error, stage.ended_at = 'FAILED', message, now()
         db.add(Event(task_id=task_id, type='TASK_FAILED', message=message))
-        from backend.models import Attempt, Agent, Execution
+        from backend.models import Attempt, Agent, Execution, AttemptEvidence
         from datetime import datetime
         for attempt in db.scalars(select(Attempt).where(Attempt.task_id==task_id,Attempt.status=='RUNNING')):
             attempt.status,attempt.ended_at,attempt.error_category = 'FAILED',now(),'INTERRUPTED'
+            evidence=db.get(AttemptEvidence,attempt.id)
+            if evidence:
+                evidence.error_message=message
             attempt.duration_seconds = (datetime.fromisoformat(attempt.ended_at)-datetime.fromisoformat(attempt.started_at)).total_seconds()
             agent = db.get(Agent,(attempt.agent_id,attempt.agent_version))
             if agent:

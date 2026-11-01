@@ -59,6 +59,11 @@ def create_app(db_engine=engine, factory=SessionLocal) -> FastAPI:
             db.execute(select(1))
         return {'status': 'ok', 'phase': 4, 'version':'0.5.0'}
 
+    @app.get('/contracts')
+    def contract_catalog():
+        from backend.contracts import catalog
+        return catalog()
+
     @app.post('/tasks', response_model=TaskView, status_code=201)
     def create_task(body: TaskCreate):
         if not body.prompt.strip():

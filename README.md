@@ -1,5 +1,7 @@
 # AgentBailout
 
+Latest repair: compatible pipeline guidance, independent failure/replacement traces, richer comparison and readable report/code output. **76 tests pass**, plus both live dashboard checks. See [repair report and exact demo steps](docs/JUDGE_VIEW_REPAIR.md).
+
 The interface now has five pages: **Home, Build Pipeline, Run & Recover, Compare Results, Settings & History**. Start with Home → Run Quick Demo → Start Task. See [the beginner navigation guide](docs/WEBSITE_NAVIGATION.md) for provider setup and complete click-by-click instructions. Cost/Time/Balanced policies, simulated budgets and deadlines affect backend execution. Gemini and Ollama adapters are mock-tested; live provider verification requires configured services.
 
 Latest update: the critical injection/state repair, reference-inspired dashboard redesign and bounded Python/GitHub diagnostics are implemented. See [AgentBailout 3.0 repair and demo report](docs/AGENTBAILOUT3_REPAIR.md) for exact behavior, evidence and limits. Backend remains on port 8003; dashboard on 8501.

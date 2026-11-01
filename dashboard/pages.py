@@ -9,11 +9,17 @@ from dashboard.client import api
 from dashboard.state import field,navigate,quick_demo
 from dashboard.components import friendly_error,pipeline,preview,recovery_story
 from dashboard.agent_form import add_agent,PROVIDERS,OPERATIONS
+from dashboard.presentation import demo_summary,stage_schematic,final_output,stage_trace,failure_details,recovery_details,timeline,comparison_panel,comparison_diff
 
 SCENARIOS={'normal':'No failure','crash':'Agent crashes','heartbeat_loss':'Agent stops responding','timeout':'Agent takes too long',
            'invalid_output':'Invalid response','tool_failure':'Tool fails','backup_failure':'Backup also fails','shared_failure':'Same failure repeats',
            'expensive':'Rescue is too expensive','insufficient_budget':'Recovery budget runs out','no_backup':'No compatible backup','exhausted':'Attempts exhausted'}
 POLICIES={'cost':'Cost','time':'Time','balanced':'Balanced'}
+
+
+def workflow_label(workflows,identity):
+    name=next(w['name'] for w in workflows if w['id']==identity)
+    return name if identity.startswith('template-') else name+' · '+identity[:8]
 
 
 def request_body(workflows):
@@ -67,22 +73,49 @@ def home(tasks,agents,workflows,providers):
 
 
 def builder(agents,workflows):
+    contracts=api('GET','/contracts')
+    pending=st.session_state.pop('builder_template_pending',None)
+    if pending:
+        st.session_state.draft['builder_template']=pending
+        for key in list(st.session_state.draft):
+            if key.startswith(('b_op_'+pending,'b_provider_'+pending,'b_agent_'+pending,'builder_count_'+pending,'builder_pool_'+pending)):
+                del st.session_state.draft[key]
+        for key in list(st.session_state):
+            if key=='field_builder_template' or key.startswith(('field_b_op_'+pending,'field_b_provider_'+pending,'field_b_agent_'+pending,'field_builder_count_'+pending)):
+                del st.session_state[key]
     st.caption('Choose → assign → protect → save. Everything you need is on this page.')
+    st.subheader('Suggested templates')
+    for col,identity,label in zip(st.columns(3),['research','coding','document'],['Research → Format → Summarize','Plan → Generate Code → Validate','Extract → Transform → Review']):
+        with col:
+            if st.button(label,key='load_template_'+identity,width='stretch'):
+                st.session_state.builder_template_pending='template-'+identity
+                st.rerun()
     st.markdown('<div class="step-label">1 / CHOOSE A TEMPLATE</div>',unsafe_allow_html=True)
     ids=[w['id'] for w in workflows]
-    chosen=field('builder_template','Workflow template','select',options=ids,default='template-research',format_func=lambda x:next(w['name'] for w in workflows if w['id']==x))
+    chosen=field('builder_template','Workflow template','select',options=ids,default='template-research',format_func=lambda x:workflow_label(workflows,x))
     template=next(w for w in workflows if w['id']==chosen)
     st.markdown('<div class="step-label">2–3 / SELECT AGENTS & PROVIDERS</div>',unsafe_allow_html=True)
     definitions=[]
+    previous_contract='Task brief'
+    previous_name='the task input'
     with st.expander('Change number or order of stages'):
         count=int(field('builder_count_'+chosen,'Number of stages','number',default=len(template['stages']),min_value=1,max_value=8))
     for i in range(count):
         initial=template['stages'][i] if i<len(template['stages']) else template['stages'][-1]
         with st.container(border=True):
-            st.markdown(f'**{i+1:02d} · {initial["name"]}**')
+            heading=st.empty()
+            allowed=[op for op,contract in contracts.items() if contract['input']==previous_contract]
+            if not allowed:
+                st.info(f'This pipeline already ends with {previous_contract}. Keep {i} stages, or load another suggested template to start a different task.')
+                break
+            role_key=f'b_op_{chosen}_{i}'
+            old_role=st.session_state.draft.get(role_key,initial['operation'])
+            if old_role not in allowed:
+                st.info(f'Step {i+1} “{contracts[old_role]["label"]}” cannot follow “{previous_name}”: it expects {contracts[old_role]["input"]}, but the previous output is {previous_contract}. Choose '+', '.join(contracts[o]['label'] for o in allowed)+'. A compatible default is selected below.')
             a,b,c=st.columns([1,1,1.5])
             with a:
-                operation=field(f'b_op_{chosen}_{i}','Role','select',options=OPERATIONS,default=initial['operation'])
+                operation=field(role_key,'Role','select',options=allowed,default=initial['operation'],format_func=lambda x:contracts[x]['label'])
+            heading.markdown(f'**{i+1:02d} · '+(initial['name'] if operation==initial['operation'] else contracts[operation]['label'])+'**')
             initial_agent=next((a for a in agents if a['id']==initial['agent_id'] and a['version']==initial['version']),None)
             with b:
                 source=field(f'b_provider_{chosen}_{i}','Provider','select',options=list(PROVIDERS),default=initial_agent['provider'] if initial_agent else 'offline',format_func=PROVIDERS.get)
@@ -93,9 +126,12 @@ def builder(agents,workflows):
                     ref=field(f'b_agent_{chosen}_{i}_{operation}_{source}','Primary agent','select',options=refs,default=initial['agent_id']+'@'+str(initial['version']),format_func=lambda x, rows=tuple(eligible):next(a['name']+' · '+a['model'] for a in rows if x==a['id']+'@'+str(a['version'])))
                     agent=next(a for a in eligible if ref==a['id']+'@'+str(a['version']))
                     st.caption(agent['provider_health']['status'].replace('_',' '))
-                    definitions.append({'name':initial['name'] if operation==initial['operation'] else operation.title(),'operation':operation,'agent_id':agent['id'],'version':agent['version']})
+                    definitions.append({'name':initial['name'] if operation==initial['operation'] else contracts[operation]['label'],'operation':operation,'agent_id':agent['id'],'version':agent['version']})
                 else:
                     st.info('Add an agent for this provider and role below.')
+            contract=contracts[operation]
+            st.markdown(f'<div class="contract-row"><span>IN · {escape(contract["input"])}</span><span>OUT · {escape(contract["output"])}</span><span>CAPABILITY · {escape(contract["label"])}</span></div>',unsafe_allow_html=True)
+            previous_contract,previous_name=contract['output'],contract['label']
     add_agent()
     st.markdown('<div class="step-label">4 / CHOOSE RECOVERY AGENTS</div>',unsafe_allow_html=True)
     st.caption('The engine checks capabilities, tools, contracts, availability, budget and deadline before using a backup.')
@@ -127,7 +163,7 @@ def controls(workflows):
     ids=[w['id'] for w in workflows]
     a,b=st.columns([1,2])
     with a:
-        selected=field('workflow_id','Saved pipeline','select',options=ids,format_func=lambda x:next(w['name'] for w in workflows if w['id']==x))
+        selected=field('workflow_id','Saved pipeline','select',options=ids,format_func=lambda x:workflow_label(workflows,x))
     with b:
         field('prompt','What should the agents do?','text')
     stages=next(w['stages'] for w in workflows if w['id']==selected)
@@ -137,9 +173,9 @@ def controls(workflows):
     with b:
         field('optimization','Recovery policy','select',options=list(POLICIES),format_func=POLICIES.get,help='Cost favors lower expected expense; Time favors speed; Balanced weighs both with reliability.')
     with c:
-        field('task_budget','Task budget (simulated $)','number',min_value=1.0,max_value=100.0,step=.5)
+        field('task_budget','Task budget (simulated $)','number',min_value=1.0,max_value=100.0,step=.5,help='Simulated funding for stage payouts, rescue, reserve and refunds. This is not a real provider billing limit.')
     with d:
-        field('deadline_seconds','Deadline (seconds)','number',min_value=1.0,max_value=600.0,step=5.0)
+        field('deadline_seconds','Deadline (seconds)','number',min_value=1.0,max_value=600.0,step=5.0,help='Maximum elapsed task time. Work is cancelled and settled safely if time runs out.')
     with st.expander('Failure test options'):
         field('fault_mode','When should the failure happen?','radio',options=['Automatic at selected stage','Wait for manual injection'])
         field('stage_index','Which stage?','select',options=list(range(len(stages))),format_func=lambda x:f'{x+1}. {stages[x]["name"]}')
@@ -148,7 +184,8 @@ def controls(workflows):
 
 
 def run_page(workflows):
-    stages=controls(workflows)
+    with st.expander('Configuration',expanded=not st.session_state.current_task):
+        stages=controls(workflows)
     body=request_body(workflows)
     pool=st.session_state.get('saved_pools',{}).get(body['workflow_id'])
     if pool is not None:
@@ -178,7 +215,7 @@ def run_page(workflows):
     existing=api('GET',f'/tasks/{identity}/execution') if identity else None
     fault_saved=bool(existing and existing['configuration'] and existing['configuration']['failure']['scenario']!='normal')
     with b:
-        if st.button('Inject Failure',icon=':material/bolt:',width='stretch',disabled=not manual or st.session_state.draft['scenario']=='normal' or fault_saved or bool(task and not pending) or bool(task and task['status'] not in {'CREATED','RUNNING'})):
+        if st.button('Inject Failure',icon=':material/bolt:',width='stretch',help='Manual test only: save one controlled fault before the chosen stage starts. Automatic tests already contain their fault.',disabled=not manual or st.session_state.draft['scenario']=='normal' or fault_saved or bool(task and not pending) or bool(task and task['status'] not in {'CREATED','RUNNING'})):
             try:
                 if not identity:
                     created=api('POST','/tasks',json=body)
@@ -198,7 +235,9 @@ def run_page(workflows):
     if manual:
         st.caption('Manual test: choose a failure and stage → Inject Failure to prepare it → Start Task. You can also inject into a pending stage during execution.')
     else:
-        st.caption('Automatic test: Start Task saves and triggers the selected failure. No second injection is needed.')
+        st.caption('Automatic test: Start Task saves your settings and triggers the selected test failure. No second injection is needed.')
+    if task and task['status'] in {'COMPLETED','FAILED'}:
+        st.caption('This run is finished. Use Reset Demo for another task; the recorded result remains in History.')
     @st.fragment(run_every=2)
     def live():
         identity=st.session_state.current_task
@@ -215,53 +254,24 @@ def run_page(workflows):
             return
         if task and current['status']!=task['status']:
             st.rerun(scope='app')
-        st.caption(f'Task {identity[:8]} · {current["status"]} · full UUID available in details')
-        pipeline(current['stages'])
-        failures=[e for e in events if e['type']=='FAILURE_DETECTED']
-        if failures:
-            recovery_story(events)
-            diagnosis=json.loads(failures[-1]['message'])
-            left,right=st.columns(2)
-            with left:
-                st.subheader('Why did it fail?')
-                st.write(diagnosis.get('message','Worker failed'))
-                st.caption(diagnosis.get('category','Unknown'))
-            with right:
-                st.subheader('Is Recovery Worth It?')
-                decisions=[json.loads(e['message']) for e in events if e['type']=='RESCUE_EVALUATED']
-                if decisions:
-                    decision=decisions[-1]
-                    st.write('Approved' if decision['approved'] else 'Declined', '·',decision['reason'])
-                    st.caption(f'Estimated simulated cost ${decision["total_rescue_cost"]} · estimated time {decision.get("estimated_seconds","unknown")}s')
-                else:
-                    st.write('Protection is OFF. No recovery was attempted.')
-            chosen=[json.loads(e['message']) for e in events if e['type']=='BACKUP_SELECTED']
-            if chosen:
-                st.info('Replacement: '+chosen[-1]['id']+' · '+chosen[-1]['rule'])
-            with st.expander('Options considered and technical evidence'):
-                st.dataframe(run['attempts'],hide_index=True,width='stretch')
-                for e in events:
-                    if e['type']=='RECOVERY_CANDIDATES':
-                        st.json(json.loads(e['message']))
-        if current['result']:
-            st.subheader('Final output')
-            st.write(current['result'].get('summary',current['result'].get('content',current['result'])))
-            st.caption(current['result'].get('source',''))
-            st.success('Task completed. '+('Simulated settlement is balanced.' if run['ledger']['balanced'] and run['ledger']['settled'] else 'Settlement pending.'))
-        elif current['error']:
-            st.error(current['error'])
-        else:
-            st.caption('Work is in progress. This view updates automatically.')
-        st.subheader('Live event timeline')
-        st.dataframe([{'Time (IST)':datetime.fromisoformat(e['timestamp']).astimezone(ZoneInfo('Asia/Kolkata')).strftime('%H:%M:%S'),'Event':e['type'].replace('_',' ').title(),'Details':e['message']} for e in events],hide_index=True,width='stretch',height=200)
-        with st.expander('Saved settings, full task ID and ledger'):
+        demo_summary(run)
+        st.subheader('Workflow')
+        stage_schematic(run)
+        final_output(run)
+        stage_trace(run)
+        failure_details(run)
+        recovery_details(run)
+        timeline(run)
+        with st.expander('Technical raw response'):
             st.json(run)
+
     live()
 
 
 def compare_page(workflows):
     st.caption('Same task. Same agent versions. Equivalent controlled failure. Two recorded outcomes.')
-    controls(workflows)
+    with st.expander('Comparison settings',expanded=not st.session_state.current_comparison):
+        controls(workflows)
     body=request_body(workflows)
     body['failure']['scenario']=st.session_state.draft['scenario']
     pool=st.session_state.get('saved_pools',{}).get(body['workflow_id'])
@@ -287,23 +297,19 @@ def compare_page(workflows):
         st.caption('Recorded comparison '+identity[:8]+' · task: '+result['baseline'].get('prompt','See execution trace')+' · changing the form does not change this saved result.')
         if busy and all(result[k]['status'] in {'COMPLETED','FAILED'} for k in ['baseline','protected']):
             st.rerun(scope='app')
-        for col,key,title in zip(st.columns(2),['baseline','protected'],['Without AgentBailout','With AgentBailout']):
-            run=result[key]
-            with col,st.container(border=True):
-                st.subheader(title)
-                st.metric('Outcome',run['status'])
-                st.caption(f'{run["execution_seconds"]:.2f}s total' if run['execution_seconds'] is not None else 'Running…')
-                st.write('API cost:',run['api_cost'] if run['api_cost'] is not None else 'Unknown')
-                st.write('Failed attempts:',run['failed_attempts'],'· Rescue attempts:',run['recovery_attempts'])
-                st.write('Recovery:', 'Succeeded' if run['recovery_success'] else 'Not successful / not needed')
-                st.caption('Simulated refund: $'+run['ledger']['balances'].get('client_refund','0.00'))
-                st.write(run['output'] or run['error'] or 'Waiting for completion')
-        if result['time_difference_seconds'] is not None:
-            delta=result['time_difference_seconds']
-            st.info(f'Baseline {result["baseline"]["status"].lower()}; protection {result["protected"]["status"].lower()}. Protection took {abs(delta):.2f}s {"longer" if delta>=0 else "less"}. Simulated allocation difference: ${result["simulated_allocation_difference"]}.')
-            st.caption('A completed protected run can cost more and take longer than an early failure. No improvement is assumed.')
-        with st.expander('Both execution traces'):
+        st.markdown('**Task prompt**')
+        st.write(result['baseline']['prompt'])
+        failed_names=[s['name'] for s in result['baseline']['stages'] if any(a['status']=='FAILED' and not a['recovery'] for a in s['attempts'])]
+        st.info(('Failure point: '+', '.join(failed_names)+'. ' if failed_names else 'No primary failure recorded yet. ')+f'Without rescue: {result["baseline"]["status"].lower()}. With rescue: {result["protected"]["status"].lower()} after {result["protected"]["recovery_attempts"]} replacement attempt(s).')
+        left,right=st.columns(2)
+        with left:
+            comparison_panel(result['baseline'],'Without AgentBailout')
+        with right:
+            comparison_panel(result['protected'],'With AgentBailout')
+        comparison_diff(result)
+        with st.expander('Technical raw response'):
             st.json(result)
+
     live()
 
 

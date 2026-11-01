@@ -1,23 +1,25 @@
 from copy import deepcopy
 from decimal import Decimal, ROUND_DOWN
 from sqlalchemy import select
-from backend.models import Task, Stage, Event, Workflow, Execution, Agent, Attempt
+from backend.models import Task, Stage, Event, Workflow, Execution, Agent, Attempt, AttemptEvidence
 from backend.registry import agent_snapshot, compatible
-from backend.contracts import CONTRACTS, PROMPT
+from backend.contracts import CONTRACTS, PROMPT, contract_name, compatible_operations, OPERATION_NAMES
 from backend.ledger import fund, snapshot
 
 
 def resolve_stages(db, definitions: list[dict]) -> list[dict]:
     previous_schema = PROMPT
     result = []
-    for definition in definitions:
+    for index,definition in enumerate(definitions):
         operation = definition['operation']
         agent = agent_snapshot(db,definition['agent_id'],definition['version'])
         ok, reason = compatible(agent,operation)
         if not ok:
             raise ValueError(f'{definition["name"]}: {reason}')
         if previous_schema != CONTRACTS[operation][0]:
-            raise ValueError(f'{definition["name"]}: preceding output does not match input contract')
+            previous=definitions[index-1]['name'] if index else 'the task input'
+            suggestions=', '.join(OPERATION_NAMES[o] for o in compatible_operations(previous_schema)) or 'end the pipeline here'
+            raise ValueError(f'Step {index+1} “{definition["name"]}” cannot follow “{previous}”: it expects {contract_name(CONTRACTS[operation][0])}, but the preceding step produces {contract_name(previous_schema)}. Suggested next steps: {suggestions}.')
         result.append({**definition,'agent':agent})
         previous_schema = CONTRACTS[operation][1]
     return result
@@ -65,6 +67,31 @@ def execution_report(db, task_id: str) -> dict:
     task = db.get(Task,task_id)
     execution = db.get(Execution,task_id)
     attempts = list(db.scalars(select(Attempt).where(Attempt.task_id==task_id).order_by(Attempt.started_at)))
+    config=execution.configuration if execution else {}
+    definitions=config.get('stages',[])
+    agent_configs=[s['agent'] for s in definitions]+config.get('recovery_pool',[])
+    serialized=[]
+    for attempt in attempts:
+        agent=next((a for a in agent_configs if a['id']==attempt.agent_id and a['version']==attempt.agent_version),{})
+        evidence=db.get(AttemptEvidence,attempt.id)
+        row={key:getattr(attempt,key) for key in ('id','stage_id','agent_id','agent_version','recovery','status','started_at','ended_at','duration_seconds','error_category','error_fingerprint','usage','api_cost','simulated_cost','output_valid')}
+        row.update(agent_name=agent.get('name',attempt.agent_id),provider=agent.get('provider','unknown'),
+                   evidence_available=bool(evidence),input=evidence.input if evidence else None,
+                   output=evidence.output if evidence else None,error_message=evidence.error_message if evidence else None)
+        serialized.append(row)
+    stages=[]
+    for stage in task.stages:
+        definition=definitions[stage.position] if stage.position<len(definitions) else {}
+        operation=definition.get('operation')
+        primary=definition.get('agent',{})
+        stages.append({'id':stage.id,'position':stage.position,'name':stage.name,'operation':operation,
+                       'primary_agent_name':primary.get('name',stage.worker_id),'primary_agent_id':primary.get('id'),
+                       'provider':primary.get('provider','unknown'),'status':stage.status,'duration_seconds':stage.duration_seconds,
+                       'input':stage.input,'output':stage.result,'error':stage.error,'recovery_attempts':stage.recovery_attempts,
+                       'input_contract':contract_name(CONTRACTS[operation][0]) if operation else 'Historical contract unavailable',
+                       'output_contract':contract_name(CONTRACTS[operation][1]) if operation else 'Historical contract unavailable',
+                       'attempts':[a for a in serialized if a['stage_id']==stage.id]})
+    events=[{'id':e.id,'timestamp':e.timestamp,'type':e.type,'message':e.message} for e in db.scalars(select(Event).where(Event.task_id==task_id).order_by(Event.id))]
     return {'task_id':task_id,'prompt':task.prompt,'status':task.status,'configuration':execution.configuration if execution else None,
             'execution_seconds':execution.duration_seconds if execution else None,
             'output':task.result,'error':task.error,
@@ -74,5 +101,5 @@ def execution_report(db, task_id: str) -> dict:
             'recovery_success':task.status=='COMPLETED' and any(a.recovery for a in attempts),
             'api_cost':str(sum(Decimal(a.api_cost) for a in attempts)) if attempts and all(a.api_cost is not None for a in attempts) else None,
             'api_cost_note':'Actual API cost is unknown unless all attempts report a grounded value; simulated allocations are separate.',
-            'attempts':[{key:getattr(a,key) for key in ('id','stage_id','agent_id','agent_version','recovery','status','started_at','ended_at','duration_seconds','error_category','error_fingerprint','usage','api_cost','simulated_cost','output_valid')} for a in attempts],
+            'attempts':serialized,'stages':stages,'events':events,
             'ledger':snapshot(db,task_id)}

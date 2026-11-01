@@ -6,7 +6,7 @@ from decimal import Decimal
 from time import monotonic
 from sqlalchemy import select
 from jsonschema import ValidationError
-from backend.models import Task, Stage, Event, Execution, Attempt, Agent, now
+from backend.models import Task, Stage, Event, Execution, Attempt, Agent, AttemptEvidence, now
 from backend.contracts import CONTRACTS, validate
 from backend.providers import provider, ProviderFailure, ProviderResult
 from backend.registry import compatible
@@ -34,6 +34,7 @@ async def attempt(factory, task_id: str, stage_id: str, agent: dict, operation: 
         db.add(record)
         db.flush()
         attempt_id = record.id
+        db.add(AttemptEvidence(attempt_id=attempt_id,input=data))
         db.get(Stage,stage_id).worker_id = agent['id']+'-v'+str(agent['version'])+'-'+attempt_id
     heartbeat = [monotonic()]
 
@@ -63,6 +64,7 @@ async def attempt(factory, task_id: str, stage_id: str, agent: dict, operation: 
         with factory.begin() as db:
             record = db.get(Attempt,attempt_id)
             record.usage,record.api_cost = response.usage,response.api_cost
+            db.get(AttemptEvidence,attempt_id).output=response.output
         try:
             validate(response.output,CONTRACTS[operation][1])
         except ValidationError:
@@ -101,6 +103,7 @@ async def attempt(factory, task_id: str, stage_id: str, agent: dict, operation: 
             record.ended_at,record.duration_seconds = now(),duration
             record.output_valid = failure is None
             if failure:
+                db.get(AttemptEvidence,attempt_id).error_message=str(failure)
                 record.error_category = failure.category
                 record.error_fingerprint = fingerprint(failure,operation,data)
             row = db.get(Agent,(agent['id'],agent['version']))
@@ -143,7 +146,8 @@ async def recover(factory, task_id: str, stage_id: str, definition: dict, data: 
     strategy=config.get('optimization','cost')
     eligible=rank_candidates(eligible,strategy)
     event(factory,task_id,'RECOVERY_CANDIDATES',json.dumps([{'id':c['agent']['id'],'version':c['agent']['version'],
-          'eligible':c['eligible'],'reason':c['reason'],'estimated_cost':c['agent']['estimated_cost']} for c in candidates]))
+          'eligible':c['eligible'],'reason':c['reason'],'estimated_cost':c['agent']['estimated_cost'],
+          'estimated_seconds':c['agent']['estimated_latency'],'success_probability_estimate':c['agent']['selection_reliability']} for c in candidates]))
     if not eligible:
         decision = evaluate()
         decision.update(approved=False,reason='No compatible available recovery agent')
@@ -171,7 +175,8 @@ async def recover(factory, task_id: str, stage_id: str, definition: dict, data: 
             stage.recovery_attempts += 1
             stage.worker_id = candidate['id']+'-v'+str(candidate['version'])
         event(factory,task_id,'RESCUE_APPROVED',decision['reason'])
-        event(factory,task_id,'BACKUP_SELECTED',json.dumps({'id':candidate['id'],'version':candidate['version'],'rule':f'{strategy.title()} policy: expected cost/time estimates and observed/prior reliability; compatible within budget and deadline'}))
+        reason=f'{strategy.title()} policy ranked {candidate["name"]} using expected cost/time and observed/prior reliability. Its quote was ${candidate["estimated_cost"]}, estimated runtime {candidate["estimated_latency"]}s and success estimate {Decimal(candidate["selection_reliability"]):.1%}; compatibility, budget and deadline checks passed.'
+        event(factory,task_id,'BACKUP_SELECTED',json.dumps({'id':candidate['id'],'version':candidate['version'],'rule':reason}))
         event(factory,task_id,'BACKUP_STARTED',candidate['id'])
         backup_fault = 'shared_failure' if mode=='shared_failure' else 'crash' if mode in {'backup_failure','exhausted'} else 'normal'
         try:
