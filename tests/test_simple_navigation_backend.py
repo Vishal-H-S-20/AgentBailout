@@ -116,13 +116,13 @@ def test_provider_connection_results_are_not_faked(client,monkeypatch):
         response=client.post('/providers/test',json={'provider':source,'model':'test-model'})
         assert response.status_code==422
         assert 'requires' in response.json()['detail']
-    assert {p['provider'] for p in client.get('/providers').json()}=={'offline','openai','gemini','anthropic','ollama'}
+    assert {p['provider'] for p in client.get('/providers').json()}=={'offline','openai','gemini','groq','anthropic','ollama'}
 
 
 def test_model_connection_test_validates_output(client,monkeypatch):
     from backend.providers import ProviderResult
     class MockProvider:
-        async def execute(self,*args):
+        async def generate(self,*args):
             return ProviderResult({'unexpected':'value'})
     monkeypatch.setattr('backend.providers.provider',lambda name:MockProvider())
     response=client.post('/providers/test',json={'provider':'gemini','model':'test-model'})

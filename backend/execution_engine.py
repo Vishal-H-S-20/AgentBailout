@@ -60,7 +60,17 @@ async def attempt(factory, task_id: str, stage_id: str, agent: dict, operation: 
         except ValidationError:
             raise ProviderFailure('INVALID_INPUT','Input failed the declared data contract') from None
         await asyncio.sleep(agent['estimated_latency'] if agent['provider']=='offline' else 0)
-        response = ProviderResult({},api_cost='0.00') if fault=='invalid_output' else await provider(agent['provider']).execute(agent,operation,data,CONTRACTS[operation][1])
+        definition=config.get('_stage_definition',{})
+        if fault=='invalid_output': response=ProviderResult({},api_cost='0.00')
+        elif operation=='custom':
+            instructions=definition.get('system_instructions') or config['_primary_instructions']
+            instructions+='\nCURRENT STAGE OBJECTIVE: '+definition.get('objective','')
+            instructions+='\nOUTPUT FORMAT: '+definition.get('output_format','markdown')
+            if definition.get('output_format')=='json': instructions+='\nReturn only JSON. Schema: '+json.dumps(definition.get('output_schema') or {'type':'object'})
+            request_config={**agent,'timeout_seconds':config['stage_timeout'],'max_output_tokens':definition.get('max_output_tokens',2000)}
+            response=await provider(agent['provider']).generate(request_config,instructions,json.dumps(data,ensure_ascii=False))
+            response.metadata={**(response.metadata or {}),'submitted_system_instructions':instructions}
+        else: response=await provider(agent['provider']).execute(agent,operation,data,CONTRACTS[operation][1])
         # Save real usage even if schema validation later fails.
         with factory.begin() as db:
             record = db.get(Attempt,attempt_id)
@@ -68,6 +78,14 @@ async def attempt(factory, task_id: str, stage_id: str, agent: dict, operation: 
             db.get(AttemptEvidence,attempt_id).output=response.output
             if response.metadata: db.add(ProviderReceipt(attempt_id=attempt_id,details=response.metadata))
         try:
+            if operation=='custom' and fault!='invalid_output':
+                content=response.output
+                if definition.get('output_format')=='json':
+                    try: content=json.loads(content)
+                    except (ValueError,TypeError): raise ProviderFailure('INVALID_OUTPUT','Model returned invalid JSON; complete response retained') from None
+                    validate(content,definition.get('output_schema') or {'type':'object'})
+                response.output={'content':content}
+                with factory.begin() as db: db.get(AttemptEvidence,attempt_id).output=response.output
             validate(response.output,CONTRACTS[operation][1])
         except ValidationError:
             raise ProviderFailure('INVALID_OUTPUT','Output failed the declared data contract') from None
@@ -86,6 +104,12 @@ async def attempt(factory, task_id: str, stage_id: str, agent: dict, operation: 
         return output
     except ProviderFailure as exc:
         failure = exc
+        if exc.partial:
+            with factory.begin() as db:
+                record=db.get(Attempt,attempt_id)
+                record.usage,record.api_cost=exc.partial.usage,exc.partial.api_cost
+                db.get(AttemptEvidence,attempt_id).output=exc.partial.output
+                if exc.partial.metadata: db.add(ProviderReceipt(attempt_id=attempt_id,details=exc.partial.metadata))
         raise
     except asyncio.CancelledError:
         failure = ProviderFailure('INTERRUPTED','Execution interrupted')
@@ -127,12 +151,14 @@ async def recover(factory, task_id: str, stage_id: str, definition: dict, data: 
                   config: dict, original: ProviderFailure, mode: str) -> dict:
     event(factory,task_id,'FAILURE_DETECTED',json.dumps({'stage_id':stage_id,'category':original.category,
         'message':str(original),'fingerprint':fingerprint(original,definition['operation'],data)}))
-    if not config['agentbailout_enabled']:
+    if not config['agentbailout_enabled'] or not definition.get('recovery_enabled',True):
         event(factory,task_id,'RECOVERY_DISABLED','Baseline mode: no retries or advanced recovery')
         raise original
     set_state(factory,task_id,'RESCUING')
     candidates = []
-    for candidate in config['recovery_pool']:
+    pool=list(config['recovery_pool'])
+    if definition.get('retry_same_model'): pool.insert(0,definition['agent'])
+    for candidate in pool:
         ok, reason = compatible(candidate,definition['operation'])
         if definition['agent']['provider']!='offline' and candidate['provider']=='offline':
             ok,reason = False,'Real LLM stages cannot recover using offline simulation'
@@ -140,7 +166,9 @@ async def recover(factory, task_id: str, stage_id: str, definition: dict, data: 
             ok,reason = False,'Estimated candidate latency exceeds stage runtime limit'
         if candidate['estimated_latency'] > config.get('_deadline',float('inf'))-monotonic():
             ok,reason = False,'Candidate cannot fit the remaining task deadline'
-        if candidate['id']==definition['agent']['id']:
+        if definition['operation']=='custom' and (candidate['id'],candidate['version']) not in {(r['agent_id'],r['version']) for r in definition.get('backup_agents',[])} and not (definition.get('retry_same_model') and candidate['id']==definition['agent']['id']):
+            ok,reason=False,'Not authorized as a backup for this stage'
+        if candidate['id']==definition['agent']['id'] and not definition.get('retry_same_model'):
             ok,reason = False,'Same agent identity as failed primary'
         if mode=='no_backup':
             ok,reason = False,'Controlled absence of eligible backups'
@@ -212,6 +240,8 @@ async def execute(factory, task_id: str) -> None:
             config = dict(execution.configuration)
             config['_deadline']=started+config.get('deadline_seconds',120)
             task = db.get(Task,task_id)
+            original_prompt=task.prompt
+            outputs=[]
             data = {'prompt':task.prompt}
             stage_ids = [s.id for s in task.stages]
         for index,(stage_id,definition) in enumerate(zip(stage_ids,config['stages'])):
@@ -219,6 +249,11 @@ async def execute(factory, task_id: str) -> None:
                 raise ProviderFailure('DEADLINE_EXCEEDED','Task deadline expired')
             active_id = stage_id
             stage_start = monotonic()
+            if definition['operation']=='custom':
+                policy=definition.get('context_policy','original_previous')
+                chosen=outputs if policy=='all' else [o for o in outputs if o['stage_id'] in definition.get('selected_prior_ids',[])] if policy=='selected' else outputs[-1:] if policy in {'previous','original_previous'} else []
+                data={'objective':definition.get('objective',''),'prior_outputs':chosen}
+                if index==0 or policy in {'original','original_previous','all'}: data['original_task']=original_prompt
             with factory.begin() as db:
                 stage = db.get(Stage,stage_id)
                 stage.status,stage.started_at,stage.input = 'RUNNING',now(),data
@@ -228,7 +263,10 @@ async def execute(factory, task_id: str) -> None:
             remaining=config['_deadline']-monotonic()
             if remaining<=0:
                 raise ProviderFailure('DEADLINE_EXCEEDED','Task deadline expired before stage execution')
-            stage_config={**config,'stage_timeout':min(config['stage_timeout'],remaining)}
+            if definition['operation']=='custom' and len(json.dumps(data,ensure_ascii=False))>definition.get('max_context_characters',60000):
+                raise ProviderFailure('CONTEXT_LIMIT','Selected context exceeds the configured character safety limit. Reduce selected prior outputs or increase the explicit limit; no input was silently discarded.')
+            timeout=definition.get('timeout_seconds',60) if definition['operation']=='custom' else config['stage_timeout']
+            stage_config={**config,'stage_timeout':min(timeout,remaining),'_stage_definition':definition,'_primary_instructions':definition['agent']['system_instructions']}
             # Read fresh fault configuration to support injection into a running pending stage.
             with factory() as db:
                 current = db.get(Execution,task_id).configuration
@@ -239,6 +277,7 @@ async def execute(factory, task_id: str) -> None:
             except ProviderFailure as exc:
                 output = await recover(factory,task_id,stage_id,definition,data,stage_config,exc,mode)
             data = output
+            outputs.append({'stage_id':definition.get('id',stage_id),'name':definition['name'],'output':output})
             with factory.begin() as db:
                 stage = db.get(Stage,stage_id)
                 stage.result,stage.status,stage.ended_at = data,'COMPLETED',now()

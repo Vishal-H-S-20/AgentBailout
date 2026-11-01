@@ -7,12 +7,14 @@ from time import monotonic
 from typing import Protocol
 import httpx
 from backend.contracts import offline
+from backend.environment import credential,ollama_url
 
 
 class ProviderFailure(Exception):
-    def __init__(self, category: str, message: str):
+    def __init__(self, category: str, message: str, partial=None):
         super().__init__(message)
         self.category = category
+        self.partial = partial
 
 
 @dataclass
@@ -31,7 +33,8 @@ class AgentProvider(Protocol):
 
 
 def key_for(name):
-    return os.getenv('GOOGLE_API_KEY') or os.getenv('GEMINI_API_KEY') if name == 'gemini' else os.getenv({'openai':'OPENAI_API_KEY','anthropic':'ANTHROPIC_API_KEY'}.get(name,''))
+    from backend.environment import credential
+    return credential(name)
 
 
 def classified(exc):
@@ -46,6 +49,8 @@ def classified(exc):
         return ProviderFailure('AUTHENTICATION_ERROR',f'Provider authorization failed (HTTP {code})')
     if code == 404:
         return ProviderFailure('MODEL_UNAVAILABLE','Requested provider model or endpoint was not found (HTTP 404)')
+    if isinstance(exc,httpx.TransportError) or 'connection' in name:
+        return ProviderFailure('TRANSPORT_ERROR','Provider connection failed; check network and provider availability')
     return ProviderFailure('MODEL_FAILURE',f'Provider request failed'+(f' (HTTP {code})' if isinstance(code,int) else ''))
 
 
@@ -64,7 +69,7 @@ class SDKProvider(OfflineProvider):
     def __init__(self, transport=None): self.transport=transport
     def validate_configuration(self, config):
         if not key_for(self.name) or not config.get('model'):
-            variable={'openai':'OPENAI_API_KEY','gemini':'GEMINI_API_KEY or GOOGLE_API_KEY','anthropic':'ANTHROPIC_API_KEY'}[self.name]
+            variable={'openai':'OPENAI_API_KEY','gemini':'GEMINI_API_KEY or GOOGLE_API_KEY','anthropic':'ANTHROPIC_API_KEY','groq':'GROQ_API_KEY'}[self.name]
             raise ProviderFailure('CONFIGURATION_ERROR',f'{self.name.title()} requires {variable} and a model identifier')
     def get_health(self, config):
         return {'status':'configured_unverified' if key_for(self.name) else 'unavailable',
@@ -92,7 +97,11 @@ class SDKProvider(OfflineProvider):
             return ProviderResult(output,usage=usage,metadata={'provider':self.name,'model':model,
                 'status':status,'started_at':started,'ended_at':datetime.now(timezone.utc).isoformat(),
                 'latency_seconds':monotonic()-clock,'request_id':request_id,'cost_status':'unknown'})
-        except ProviderFailure: raise
+        except ProviderFailure as exc:
+            if exc.partial:
+                exc.partial.metadata={**(exc.partial.metadata or {}),'provider':self.name,'started_at':started,
+                                      'ended_at':datetime.now(timezone.utc).isoformat(),'latency_seconds':monotonic()-clock,'cost_status':'unknown'}
+            raise
         except Exception as exc: raise classified(exc) from None
     async def list_models(self):
         if not key_for(self.name):
@@ -114,7 +123,7 @@ class OpenAIProvider(SDKProvider):
         if schema: args['text']={'format':{'type':'json_schema','name':'stage_output','strict':True,'schema':schema}}
         async with self.client(timeout) as client:
             result=await client.responses.create(**args)
-        if result.status!='completed': raise ProviderFailure('MODEL_FAILURE','OpenAI response was incomplete')
+        if result.status!='completed': raise ProviderFailure('MODEL_FAILURE','OpenAI response was incomplete; any returned content and usage were retained. Start an explicit continuation task if an output limit was reached.',ProviderResult(result.output_text,usage=result.usage.model_dump(exclude_none=True) if result.usage else None,metadata={'model':result.model or config['model'],'status':result.status,'request_id':result.id}))
         usage=result.usage.model_dump(exclude_none=True) if result.usage else None
         return result.output_text,usage,result.model or config['model'],getattr(result,'_request_id',None) or result.id,result.status
     async def _models(self):
@@ -138,7 +147,9 @@ class GeminiProvider(SDKProvider):
         async with self.client(timeout) as client:
             result=await client.models.generate_content(model=config['model'],contents=prompt,config=types.GenerateContentConfig(**settings))
         if not result.candidates or str(result.candidates[0].finish_reason).split('.')[-1]!='STOP':
-            raise ProviderFailure('MODEL_FAILURE','Gemini response was incomplete or blocked')
+            partial_text=''.join(part.text or '' for candidate in result.candidates or [] for part in (candidate.content.parts if candidate.content else []) or [])
+            raw=result.usage_metadata
+            raise ProviderFailure('MODEL_FAILURE','Gemini response was incomplete or blocked; returned content retained for explicit continuation.',ProviderResult(partial_text,usage={'input_tokens':raw.prompt_token_count,'output_tokens':raw.candidates_token_count,'total_tokens':raw.total_token_count} if raw else None,metadata={'model':result.model_version or config['model'],'status':str(result.candidates[0].finish_reason) if result.candidates else 'blocked','request_id':result.response_id}))
         raw=result.usage_metadata
         usage=None if not raw else {'input_tokens':raw.prompt_token_count,'output_tokens':raw.candidates_token_count,
                                    'total_tokens':raw.total_token_count,'provider_usage':raw.model_dump(mode='json')}
@@ -162,11 +173,34 @@ class AnthropicProvider(SDKProvider):
         async with self.client(timeout) as client:
             result=await client.messages.create(model=config['model'],max_tokens=tokens,system=instructions,
                 messages=[{'role':'user','content':prompt}])
-        if result.stop_reason!='end_turn': raise ProviderFailure('MODEL_FAILURE','Claude response was incomplete or required unsupported tools')
+        if result.stop_reason!='end_turn': raise ProviderFailure('MODEL_FAILURE','Claude response was incomplete or required unsupported tools; returned content retained for explicit continuation.',ProviderResult(''.join(part.text for part in result.content if part.type=='text'),usage=result.usage.model_dump(),metadata={'model':result.model,'status':result.stop_reason,'request_id':result.id}))
         return ''.join(part.text for part in result.content if part.type=='text'),result.usage.model_dump(),result.model,getattr(result,'_request_id',None) or result.id,'completed'
     async def _models(self):
         async with self.client(15) as client:
             return [item.id async for item in client.models.list()]
+
+
+class GroqProvider(SDKProvider):
+    name='groq'
+    def client(self,timeout):
+        from groq import AsyncGroq
+        return AsyncGroq(api_key=key_for(self.name),base_url='https://api.groq.com',timeout=timeout,max_retries=0,
+            http_client=httpx.AsyncClient(transport=self.transport,timeout=timeout,trust_env=False))
+    async def _generate(self,config,instructions,prompt,schema):
+        timeout,tokens=self.options(config)
+        # JSON-mode availability varies by model. Prompt plus local validation works without assuming it.
+        if schema: instructions+='\nReturn ONLY JSON matching this schema: '+json.dumps(schema)
+        async with self.client(timeout) as client:
+            result=await client.chat.completions.create(model=config['model'],max_completion_tokens=tokens,
+                messages=[{'role':'system','content':instructions},{'role':'user','content':prompt}])
+        if not result.choices or result.choices[0].finish_reason!='stop':
+            raise ProviderFailure('MODEL_FAILURE','Groq response was incomplete or required unsupported tools; returned content retained for explicit continuation.',ProviderResult(result.choices[0].message.content if result.choices else '',usage={'input_tokens':result.usage.prompt_tokens,'output_tokens':result.usage.completion_tokens,'total_tokens':result.usage.total_tokens} if result.usage else None,metadata={'model':result.model,'status':result.choices[0].finish_reason if result.choices else 'empty','request_id':result.id}))
+        usage={'input_tokens':result.usage.prompt_tokens,'output_tokens':result.usage.completion_tokens,'total_tokens':result.usage.total_tokens,'provider_usage':result.usage.model_dump(exclude_none=True)} if result.usage else None
+        return result.choices[0].message.content,usage,result.model,getattr(result,'_request_id',None) or result.id,'completed'
+    async def _models(self):
+        async with self.client(15) as client:
+            result=await client.models.list()
+            return [item.id for item in result.data]
 
 
 class OllamaProvider(OfflineProvider):
@@ -178,15 +212,36 @@ class OllamaProvider(OfflineProvider):
     async def list_models(self):
         try:
             async with httpx.AsyncClient(transport=self.transport,timeout=15,trust_env=False) as client:
-                response=await client.get(os.getenv('OLLAMA_URL','http://127.0.0.1:11434').rstrip('/')+'/api/tags')
+                response=await client.get(ollama_url()+'/api/tags')
                 response.raise_for_status()
             return sorted(item['name'] for item in response.json()['models'])
+        except Exception as exc: raise classified(exc) from None
+    async def generate(self,config,instructions,prompt,schema=None):
+        self.validate_configuration(config)
+        from backend.environment import ollama_url
+        started=datetime.now(timezone.utc).isoformat(); clock=monotonic()
+        try:
+            payload={'model':config['model'],'stream':False,'options':{'num_predict':config.get('max_output_tokens',2000)},
+                     'messages':[{'role':'system','content':instructions},{'role':'user','content':prompt}]}
+            if schema: payload['format']=schema
+            async with httpx.AsyncClient(transport=self.transport,timeout=config.get('timeout_seconds',60),trust_env=False) as client:
+                response=await client.post(ollama_url()+'/api/chat',json=payload)
+                response.raise_for_status()
+            result=response.json()
+            if not result.get('done') or result.get('done_reason')=='length': raise ProviderFailure('MODEL_FAILURE','Ollama response was incomplete')
+            content=result['message']['content']
+            return ProviderResult(json.loads(content) if schema else content,
+                usage={'input_tokens':result.get('prompt_eval_count'),'output_tokens':result.get('eval_count')},
+                metadata={'provider':'ollama','model':result.get('model',config['model']),'status':'completed',
+                          'started_at':started,'ended_at':datetime.now(timezone.utc).isoformat(),'latency_seconds':monotonic()-clock,'cost_status':'unknown'})
+        except ProviderFailure: raise
+        except (ValueError,KeyError,TypeError): raise ProviderFailure('INVALID_OUTPUT','Provider returned invalid structured data') from None
         except Exception as exc: raise classified(exc) from None
     async def execute(self,config,operation,data,schema):
         self.validate_configuration(config)
         try:
             async with httpx.AsyncClient(transport=self.transport,timeout=60,trust_env=False) as client:
-                response=await client.post(os.getenv('OLLAMA_URL','http://127.0.0.1:11434').rstrip('/')+'/api/chat',json={
+                response=await client.post(ollama_url()+'/api/chat',json={
                     'model':config['model'],'stream':False,'format':schema,'options':{'num_predict':2000},'messages':[
                     {'role':'system','content':config.get('system_instructions','')+'\nStage: '+operation},
                     {'role':'user','content':json.dumps(data)}]})
@@ -200,6 +255,6 @@ class OllamaProvider(OfflineProvider):
 
 
 def provider(name):
-    choices={'offline':OfflineProvider,'openai':OpenAIProvider,'gemini':GeminiProvider,'anthropic':AnthropicProvider,'ollama':OllamaProvider}
+    choices={'offline':OfflineProvider,'openai':OpenAIProvider,'gemini':GeminiProvider,'anthropic':AnthropicProvider,'groq':GroqProvider,'ollama':OllamaProvider}
     if name not in choices: raise ProviderFailure('CONFIGURATION_ERROR','Unsupported provider')
     return choices[name]()

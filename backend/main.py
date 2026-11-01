@@ -7,12 +7,13 @@ from typing import Literal
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select, text
 from jsonschema import ValidationError
 from backend.database import Base, engine, SessionLocal
 from backend.models import Task, Stage, Event, Agent, Workflow, Execution, Comparison
-from backend.schemas import TaskCreate, TaskView, EventView, FaultDefinition, AgentCreate, WorkflowCreate
+from backend.schemas import SafeInputModel, TaskCreate, TaskView, EventView, FaultDefinition, AgentCreate, WorkflowCreate
 from backend.supervisor import AGENTS, claim, execute, fail
 from backend.ledger import fund, snapshot
 
@@ -26,6 +27,8 @@ def create_app(db_engine=engine, factory=SessionLocal) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app):
+        from backend.provider_startup import prepare_sdks
+        await asyncio.to_thread(prepare_sdks)
         from backend.migrations import migrate
         from backend.registry import seed
         migrate(db_engine)
@@ -41,6 +44,11 @@ def create_app(db_engine=engine, factory=SessionLocal) -> FastAPI:
         await asyncio.gather(*jobs, return_exceptions=True)
 
     app = FastAPI(title='AgentBailout', version='0.5.0', lifespan=lifespan)
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(request, exc):
+        # Never echo submitted credential-bearing values in validation responses.
+        return JSONResponse(status_code=422,content={'detail':[{'loc':list(e['loc']),'msg':e['msg'],'type':e['type']} for e in exc.errors()]})
 
     @app.exception_handler(IntegrityError)
     async def conflict(request, exc):
@@ -192,7 +200,7 @@ def create_app(db_engine=engine, factory=SessionLocal) -> FastAPI:
         from backend.workflows import resolve_stages
         with factory.begin() as db:
             try:
-                resolve_stages(db,[s.model_dump() for s in body.stages])
+                resolve_stages(db,[s.model_dump() for s in body.stages],require_configuration=False)
                 if body.recovery_pool is not None:
                     from backend.registry import agent_snapshot
                     for ref in body.recovery_pool:
@@ -269,14 +277,14 @@ def create_app(db_engine=engine, factory=SessionLocal) -> FastAPI:
 
     from backend.diagnostics import DiagnosticRequest, diagnose
 
-    class ConnectionRequest(BaseModel):
-        provider: Literal['offline','openai','gemini','anthropic','ollama']
+    class ConnectionRequest(SafeInputModel):
+        provider: Literal['offline','openai','gemini','groq','anthropic','ollama']
         model: str
 
     def credential_fingerprint(name):
         import hashlib, os
         from backend.providers import key_for
-        material=(key_for(name) or '') if name!='ollama' else os.getenv('OLLAMA_URL','http://127.0.0.1:11434')
+        material=(key_for(name) or '') if name!='ollama' else __import__('backend.environment',fromlist=['ollama_url']).ollama_url()
         return hashlib.sha256(material.encode()).hexdigest()
 
     def save_check(name, report):
@@ -284,7 +292,7 @@ def create_app(db_engine=engine, factory=SessionLocal) -> FastAPI:
         from backend.models import now
         with factory.begin() as db:
             previous=db.get(ProviderCheck,name)
-            report={**report,'checked_at':now(),'last_success_at':now() if report.get('connected') else (previous.report.get('last_success_at') if previous and previous.credential_fingerprint==credential_fingerprint(name) else None)}
+            report={'models':previous.report.get('models',[]) if previous and previous.credential_fingerprint==credential_fingerprint(name) else [],**report,'checked_at':now(),'last_success_at':now() if report.get('connected') else (previous.report.get('last_success_at') if previous and previous.credential_fingerprint==credential_fingerprint(name) else None)}
             if previous:
                 previous.report=report
                 previous.credential_fingerprint=credential_fingerprint(name)
@@ -299,27 +307,36 @@ def create_app(db_engine=engine, factory=SessionLocal) -> FastAPI:
         with factory() as db:
             versions=list(db.scalars(select(Agent)))
             result=[]
-            for name in ['offline','openai','gemini','anthropic','ollama']:
+            for name in ['offline','openai','gemini','groq','anthropic','ollama']:
                 models=[a.configuration['model'] for a in versions if a.configuration['provider']==name]
                 model=os.getenv(name.upper()+'_MODEL',models[-1] if models else 'deterministic-v1' if name=='offline' else '')
                 row={'provider':name,'model':model,**provider(name).get_health({'model':model}),
-                     'available_models':[],'last_success_at':None,'error':None}
+                     'api_key_configured':bool(__import__('backend.providers',fromlist=['key_for']).key_for(name)),'available_models':[],'last_success_at':None,'last_check':None,'error':None}
                 check=db.get(ProviderCheck,name)
                 if check and check.credential_fingerprint==credential_fingerprint(name):
                     report=check.report
-                    row.update(last_success_at=report.get('last_success_at'),available_models=report.get('models',[]),error=report.get('error'))
-                    row['status']='verified_connected' if report.get('connected') else 'disconnected'
+                    row.update(last_check=report.get('checked_at'),last_success_at=report.get('last_success_at'),available_models=report.get('models',[]),error=report.get('error'))
+                    row['status']='verified_connected' if report.get('connected') else 'disconnected' if report.get('error') else row['status']
                     row['verified_connection']=bool(report.get('connected'))
                     row['verified_model']=report.get('model')
                 result.append(row)
             return result
 
     @app.get('/providers/{name}/models')
-    async def provider_models(name: Literal['openai','gemini','anthropic','ollama']):
+    async def provider_models(name: Literal['openai','gemini','groq','anthropic','ollama']):
         from backend.providers import provider, ProviderFailure
         try:
             models=await asyncio.wait_for(provider(name).list_models(),timeout=20)
-            # Discovery verifies credentials/connectivity, not generation support for every returned model.
+            from backend.models import ProviderCheck
+            with factory.begin() as db:
+                row=db.get(ProviderCheck,name)
+                previous=dict(row.report) if row and row.credential_fingerprint==credential_fingerprint(name) else {}
+                previous['models']=models
+                if row:
+                    row.report=previous
+                    row.credential_fingerprint=credential_fingerprint(name)
+                else: db.add(ProviderCheck(provider=name,credential_fingerprint=credential_fingerprint(name),report=previous))
+            # Discovery is not a successful generation test.
             return {'provider':name,'models':models,'note':'Provider-discovered identifiers; test generation with your selected model.'}
         except ProviderFailure as exc:
             save_check(name,{'connected':False,'provider':name,'error':str(exc)})
@@ -338,13 +355,12 @@ def create_app(db_engine=engine, factory=SessionLocal) -> FastAPI:
         if body.provider=='offline':
             return {'connected':True,'provider':'offline','message':'Offline simulation is ready; no model call was made.'}
         try:
-            response=await asyncio.wait_for(provider(body.provider).execute({'model':body.model,'system_instructions':'Connection test. Return {"ok":true}.','max_output_tokens':128,'timeout_seconds':15},'connection_test',{'request':'Return ok true'},schema),timeout=20)
-            validate(response.output,schema)
-            if response.output['ok'] is not True:
-                raise ValueError('Connection test response did not confirm readiness')
-            return save_check(body.provider,{'connected':True,'provider':body.provider,'model':body.model,'usage':response.usage,'metadata':response.metadata,'message':'A real model request completed and its output was validated.'})
+            response=await asyncio.wait_for(provider(body.provider).generate({'model':body.model,'max_output_tokens':512,'timeout_seconds':15},'This is a brief connection test. Reply with OK.','Reply with OK.'),timeout=20)
+            if not isinstance(response.output,str) or not response.output.strip():
+                raise ValueError('Connection test did not return nonempty text')
+            return save_check(body.provider,{'connected':True,'provider':body.provider,'model':body.model,'usage':response.usage,'metadata':response.metadata,'message':'A real text-generation request completed; the selected model returned nonempty text.'})
         except (ProviderFailure,TimeoutError,ValueError,ValidationError) as exc:
-            message=str(exc) if isinstance(exc,ProviderFailure) else 'Provider connection test timed out' if isinstance(exc,TimeoutError) else 'Model response did not match the connection-test contract'
+            message=str(exc) if isinstance(exc,ProviderFailure) else 'Provider connection test timed out' if isinstance(exc,TimeoutError) else 'Connection test did not return a valid text response'
             save_check(body.provider,{'connected':False,'provider':body.provider,'model':body.model,'error':message})
             raise HTTPException(422,message) from None
 

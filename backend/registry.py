@@ -18,11 +18,12 @@ def configuration(name: str, capabilities: list[str], **kwargs) -> dict:
 
 def seed(db) -> None:
     for op in CONTRACTS:
+        if op=='custom': continue
         identity = 'offline-'+op
         if not db.get(Agent,(identity,1)):
             db.add(Agent(id=identity,version=1,configuration=configuration(op.title(),[op])))
     for identity,name,caps in [
-        ('recovery-general','General Recovery',list(CONTRACTS)),
+        ('recovery-general','General Recovery',[op for op in CONTRACTS if op!='custom']),
         ('recovery-document','Document Recovery',['research','format','summarize','extract','transform','review']),
         ('recovery-coding','Coding Recovery',['plan','code','validate'])]:
         if not db.get(Agent,(identity,1)):
@@ -63,8 +64,19 @@ def compatible(candidate: dict, operation: str) -> tuple[bool,str]:
 
 def public_agent(row: Agent) -> dict:
     total = row.successes+row.failures
+    health=provider(row.configuration['provider']).get_health(row.configuration)
+    from sqlalchemy.orm import object_session
+    from backend.models import ProviderCheck
+    from backend.connections import fingerprint
+    db=object_session(row)
+    check=db.get(ProviderCheck,row.configuration['provider']) if db else None
+    if check and check.credential_fingerprint==fingerprint(row.configuration['provider']):
+        report=check.report
+        verified=bool(report.get('connected') and report.get('model')==row.configuration['model'])
+        health.update(verified_connection=verified,status='verified_connected' if verified else health['status'],
+                      last_check=report.get('checked_at'),error=report.get('error'))
     return {'id':row.id,'version':row.version,**row.configuration,
-            'provider_health':provider(row.configuration['provider']).get_health(row.configuration),
+            'provider_health':health,
             'successful_executions':row.successes,'failed_executions':row.failures,'timeouts':row.timeouts,
             'observed_average_latency':row.total_seconds/total if total else None,
             'measured_reliability':row.successes/total if total else None,

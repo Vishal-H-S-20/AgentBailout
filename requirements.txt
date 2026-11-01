@@ -10,3 +10,5 @@ jsonschema>=4.23,<5
 openai>=2,<3
 google-genai>=2.34,<3
 anthropic>=0.125,<1
+groq>=1.7,<2
+python-dotenv>=1.2,<2

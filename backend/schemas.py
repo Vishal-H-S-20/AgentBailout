@@ -1,16 +1,23 @@
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing import Literal
 from decimal import Decimal
+from uuid import uuid4
 
-Operation = Literal['research','format','summarize','plan','code','validate','extract','transform','review']
+class SafeInputModel(BaseModel):
+    @model_validator(mode='before')
+    @classmethod
+    def reject_configured_secrets(cls, values):
+        import json,re
+        from backend.environment import credential
+        text=json.dumps(values,default=str)
+        looks_like_key=bool(re.search(r'(?:sk-(?:proj-|ant-)?[A-Za-z0-9_-]{25,}|gsk_[A-Za-z0-9]{25,}|AIza[A-Za-z0-9_-]{25,})',text))
+        if looks_like_key or any(secret and len(secret)>6 and secret in text for secret in [credential(name) for name in ['openai','gemini','groq','anthropic']]):
+            raise ValueError('API credentials belong only in the backend environment, not in saved prompts or configuration')
+        return values
+
+
+Operation = Literal['research','format','summarize','plan','code','validate','extract','transform','review','custom']
 Scenario = Literal['normal','crash','heartbeat_loss','timeout','invalid_output','tool_failure','backup_failure','shared_failure','expensive','insufficient_budget','no_backup','exhausted']
-
-
-class StageDefinition(BaseModel):
-    name: str = Field(min_length=1,max_length=80)
-    operation: Operation
-    agent_id: str = Field(min_length=1,max_length=80)
-    version: int = Field(default=1,ge=1)
 
 
 class AgentRef(BaseModel):
@@ -18,24 +25,53 @@ class AgentRef(BaseModel):
     version: int = Field(default=1,ge=1)
 
 
+class StageDefinition(SafeInputModel):
+    id: str = Field(default_factory=lambda:str(uuid4()),max_length=80)
+    name: str = Field(min_length=1,max_length=80)
+    operation: Operation
+    agent_id: str = Field(min_length=1,max_length=80)
+    version: int = Field(default=1,ge=1)
+    objective: str = Field(default='',max_length=12000)
+    system_instructions: str | None = Field(default=None,max_length=16000)
+    output_format: Literal['markdown','text','code','json'] = 'markdown'
+    code_language: Literal['python','javascript','sql','bash','text'] = 'text'
+    output_schema: dict | None = None
+    context_policy: Literal['original','previous','original_previous','all','selected'] = 'original_previous'
+    selected_prior_ids: list[str] = Field(default_factory=list,max_length=10)
+    timeout_seconds: float = Field(default=60,ge=.1,le=300,allow_inf_nan=False)
+    max_output_tokens: int = Field(default=2000,ge=1,le=32768)
+    max_context_characters: int = Field(default=60000,ge=1000,le=500000)
+    recovery_enabled: bool = True
+    retry_same_model: bool = False
+    backup_agents: list[AgentRef] = Field(default_factory=list,max_length=10)
+
+    @model_validator(mode='after')
+    def valid_schema(self):
+        if self.output_schema is not None:
+            from jsonschema import Draft202012Validator, SchemaError
+            try: Draft202012Validator.check_schema(self.output_schema)
+            except SchemaError: raise ValueError('Output schema is not a valid JSON Schema') from None
+        return self
+
+
 class FaultDefinition(BaseModel):
     scenario: Scenario = 'normal'
-    stage_index: int | None = Field(default=None,ge=0,le=7)
+    stage_index: int | None = Field(default=None,ge=0,le=9)
 
 
-class WorkflowCreate(BaseModel):
+class WorkflowCreate(SafeInputModel):
     name: str = Field(min_length=1,max_length=80)
-    stages: list[StageDefinition] = Field(min_length=1,max_length=8)
+    stages: list[StageDefinition] = Field(min_length=1,max_length=10)
     recovery_pool: list[AgentRef] | None = Field(default=None,max_length=10)
 
 
-class AgentCreate(BaseModel):
+class AgentCreate(SafeInputModel):
     id: str = Field(pattern=r'^[a-zA-Z0-9_-]{1,80}$')
     name: str = Field(min_length=1,max_length=80)
-    provider: Literal['offline','openai','gemini','anthropic','ollama'] = 'offline'
+    provider: Literal['offline','openai','gemini','groq','anthropic','ollama'] = 'offline'
     model: str = Field(default='deterministic-v1',min_length=1,max_length=120)
-    system_instructions: str = Field(default='Perform the stage and return the declared JSON structure.',min_length=1,max_length=4000)
-    capabilities: list[Operation] = Field(min_length=1,max_length=9)
+    system_instructions: str = Field(default='Perform the stage and return the declared JSON structure.',min_length=1,max_length=16000)
+    capabilities: list[Operation] = Field(min_length=1,max_length=10)
     required_tools: list[str] = Field(default_factory=list,max_length=10)
     estimated_cost: Decimal = Field(default=Decimal('0.25'),ge=0,le=100,decimal_places=2)
     estimated_latency: float = Field(default=.1,ge=.01,le=120,allow_inf_nan=False)
@@ -56,10 +92,10 @@ class AgentCreate(BaseModel):
         return value
 
 
-class TaskCreate(BaseModel):
-    prompt: str = Field(min_length=3, max_length=2000)
+class TaskCreate(SafeInputModel):
+    prompt: str = Field(min_length=3, max_length=50000)
     workflow_id: str = 'template-research'
-    stages: list[StageDefinition] | None = Field(default=None,min_length=1,max_length=8)
+    stages: list[StageDefinition] | None = Field(default=None,min_length=1,max_length=10)
     recovery_pool: list[AgentRef] = Field(default_factory=lambda:[AgentRef(agent_id='recovery-general'),AgentRef(agent_id='recovery-document'),AgentRef(agent_id='recovery-coding')],max_length=10)
     agentbailout_enabled: bool = True
     failure: FaultDefinition = Field(default_factory=FaultDefinition)

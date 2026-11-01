@@ -1,3 +1,13 @@
+# Current 4.1 navigation
+
+Build Pipeline now defaults to the fully custom editor; legacy guided offline templates are optional. Run & Recover uses a large multiline task prompt. Settings shows configured/verified state, model discovery, last check and backend-only credential instructions. The visual theme uses warm charcoal, ivory, terracotta, sage, mustard and plum.
+
+Start with [provider setup](PROVIDER_SETUP.md), [custom pipelines](REAL_LLM_PIPELINES.md) and [demo](DEMO_GUIDE.md).
+
+---
+
+Historical navigation notes follow.
+
 # AgentBailout — five-page navigation
 
 The sidebar now has exactly five primary pages. The complete demonstration stays on Run & Recover. Other pages configure a pipeline or inspect recorded results. The blue/violet theme, icon buttons, numbered stage cards, outcome ring and red-to-green recovery strip use actual backend data; they do not generate fictional activity.

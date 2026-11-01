@@ -4,7 +4,7 @@ import streamlit as st
 from dashboard.client import api
 from dashboard.components import friendly_error
 
-PROVIDERS={'offline':'Offline simulation','openai':'GPT / OpenAI','anthropic':'Claude', 'gemini':'Gemini','ollama':'Ollama (local)'}
+PROVIDERS={'offline':'Offline simulation','openai':'GPT / OpenAI','anthropic':'Claude', 'groq':'Groq','gemini':'Gemini','ollama':'Ollama (local)'}
 OPERATIONS=['research','format','summarize','plan','code','validate','extract','transform','review']
 
 

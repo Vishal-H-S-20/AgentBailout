@@ -7,7 +7,7 @@ BASE=os.getenv('AGENTBAILOUT_BACKEND_URL','http://127.0.0.1:8003')
 
 @st.cache_resource
 def client():
-    return httpx.Client(base_url=BASE,timeout=20)
+    return httpx.Client(base_url=BASE,timeout=30)
 
 
 def api(method: str,path: str,**kwargs):

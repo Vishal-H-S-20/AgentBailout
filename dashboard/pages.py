@@ -62,8 +62,8 @@ def home(tasks,agents,workflows,providers):
         st.subheader('Recovery outcomes')
         values=[metrics['successful_recoveries'],max(0,metrics['failures_detected']-metrics['successful_recoveries'])]
         if sum(values):
-            figure=go.Figure(go.Pie(labels=['Recovered','Other detected failures'],values=values,hole=.78,marker_colors=['#59dab6','#344776'],textinfo='none'))
-            figure.update_layout(height=250,paper_bgcolor='rgba(0,0,0,0)',font_color='#c7d5ed',margin=dict(l=10,r=10,t=10,b=10),legend_orientation='h')
+            figure=go.Figure(go.Pie(labels=['Recovered','Other detected failures'],values=values,hole=.78,marker_colors=['#a8c7a2','#725c4a'],textinfo='none'))
+            figure.update_layout(height=250,paper_bgcolor='rgba(0,0,0,0)',font_color='#eee8dc',margin=dict(l=10,r=10,t=10,b=10),legend_orientation='h')
             st.plotly_chart(figure,width='stretch')
         else:
             st.info('Your recovery chart appears after a failure is detected.')
@@ -73,6 +73,11 @@ def home(tasks,agents,workflows,providers):
 
 
 def builder(agents,workflows):
+    mode=st.radio('Pipeline type',['Custom AI pipeline','Guided offline templates'],horizontal=True,key='builder_mode')
+    if mode=='Custom AI pipeline':
+        from dashboard.custom_builder import custom_builder
+        custom_builder(api('GET','/providers'),agents,workflows)
+        return
     contracts=api('GET','/contracts')
     pending=st.session_state.pop('builder_template_pending',None)
     if pending:
@@ -91,7 +96,7 @@ def builder(agents,workflows):
                 st.session_state.builder_template_pending='template-'+identity
                 st.rerun()
     st.markdown('<div class="step-label">1 / CHOOSE A TEMPLATE</div>',unsafe_allow_html=True)
-    ids=[w['id'] for w in workflows]
+    ids=[w['id'] for w in workflows if all(s['operation']!='custom' for s in w['stages'])]
     chosen=field('builder_template','Workflow template','select',options=ids,default='template-research',format_func=lambda x:workflow_label(workflows,x))
     template=next(w for w in workflows if w['id']==chosen)
     st.markdown('<div class="step-label">2–3 / SELECT AGENTS & PROVIDERS</div>',unsafe_allow_html=True)
@@ -165,7 +170,7 @@ def controls(workflows):
     with a:
         selected=field('workflow_id','Saved pipeline','select',options=ids,format_func=lambda x:workflow_label(workflows,x))
     with b:
-        field('prompt','What should the agents do?','text')
+        field('prompt','What should the agents do?','area',height=170,max_chars=50000)
     stages=next(w['stages'] for w in workflows if w['id']==selected)
     a,b,c,d=st.columns([1.5,1,1,1])
     with a:
@@ -178,7 +183,8 @@ def controls(workflows):
         field('deadline_seconds','Deadline (seconds)','number',min_value=1.0,max_value=600.0,step=5.0,help='Maximum elapsed task time. Work is cancelled and settled safely if time runs out.')
     with st.expander('Failure test options'):
         field('fault_mode','When should the failure happen?','radio',options=['Automatic at selected stage','Wait for manual injection'])
-        field('stage_index','Which stage?','select',options=list(range(len(stages))),format_func=lambda x:f'{x+1}. {stages[x]["name"]}')
+        available_agents=api('GET','/agents')
+        field('stage_index','Which stage?','select',options=list(range(len(stages))),format_func=lambda x:f'{x+1}. {stages[x]["name"]} · '+next((a['provider'] for a in available_agents if a['id']==stages[x]['agent_id'] and a['version']==stages[x]['version']),'unknown'))
     field('protected','AgentBailout Protection','toggle',help='ON evaluates recovery. OFF stops at failure without advanced recovery.')
     return stages
 
@@ -316,12 +322,18 @@ def compare_page(workflows):
 def settings(tasks,agents,providers):
     provider_tab,recovery_tab,history_tab,ledger_tab=st.tabs(['AI Providers','Recovery Settings','History','Ledger & Analytics'])
     with provider_tab:
-        st.caption('Keys stay in the backend environment. A configured key is not proof of a working connection.')
+        st.info('Put API keys in the backend .env file or server environment, then restart the backend. Keys are never entered into this browser.')
+        with st.expander('Credential setup · Windows CMD'):
+            st.code('copy .env.example .env\nnotepad .env\n.venv\\Scripts\\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8003',language='bat')
+            st.caption('Fill only the providers you use. Shell variables take precedence over .env. GEMINI_API_KEY takes precedence over the GOOGLE_API_KEY alias. Restart the backend after editing.')
         for row in providers:
             with st.container(border=True):
                 a,b,c=st.columns([1,2,1])
                 with a:
                     st.write(PROVIDERS[row['provider']])
+                    if row['provider'] not in {'offline','ollama'}: st.caption('API key configured: '+('Yes' if row.get('api_key_configured') else 'No'))
+                    st.caption('Connection verified: '+('Yes' if row.get('verified_connection') else 'No'))
+                    if row.get('last_check'): st.caption('Last check: '+row['last_check'])
                     st.caption(('not configured' if row.get('configuration_status')=='not_configured' and row['status']=='unavailable' else row['status'].replace('_',' ')))
                     if row.get('last_success_at'): st.caption('Last successful test: '+row['last_success_at'])
                     if row.get('verified_model'): st.caption('Tested model: '+row['verified_model'])
@@ -348,7 +360,7 @@ def settings(tasks,agents,providers):
                         except httpx.HTTPError as exc:
                             st.session_state.connection_tests={**st.session_state.get('connection_tests',{}),row['provider']:{'connected':False}}
                             friendly_error(exc)
-        st.caption('Set OPENAI_API_KEY / GEMINI_API_KEY (or GOOGLE_API_KEY) / ANTHROPIC_API_KEY and an accessible model identifier, or run Ollama and install a model. No keys are entered into agent instructions.')
+        st.caption('Set OPENAI_API_KEY / GEMINI_API_KEY (or GOOGLE_API_KEY) / GROQ_API_KEY / ANTHROPIC_API_KEY and an accessible model identifier, or run Ollama and install a model. No keys are entered into agent instructions.')
     with recovery_tab:
         st.write('Defaults for new tasks; existing runs keep their saved policy.')
         field('max_attempts','Maximum recovery attempts','number',min_value=1,max_value=3)
@@ -380,8 +392,8 @@ def settings(tasks,agents,providers):
             st.write('Settled:',ledger['settled'],'· Balanced:',ledger['balanced'])
             positive={k:float(v) for k,v in ledger['balances'].items() if k not in {'client','escrow'} and float(v)>0}
             if positive:
-                fig=go.Figure(go.Bar(x=list(positive),y=list(positive.values()),marker_color='#658bff'))
-                fig.update_layout(height=250,paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)',font_color='#b8caeb',yaxis_title='Simulated dollars',margin=dict(l=20,r=20,t=15,b=20))
+                fig=go.Figure(go.Bar(x=list(positive),y=list(positive.values()),marker_color=['#e39774','#a8c7a2','#d9bc69','#c4a4cd']))
+                fig.update_layout(height=250,paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)',font_color='#eee8dc',yaxis_title='Simulated dollars',margin=dict(l=20,r=20,t=15,b=20))
                 st.plotly_chart(fig,width='stretch')
             st.dataframe(ledger['entries'],hide_index=True,width='stretch')
         st.caption('These are simulated allocations. External model API costs remain separate and unknown without verified pricing.')

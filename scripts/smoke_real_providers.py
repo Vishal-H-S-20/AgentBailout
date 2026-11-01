@@ -9,7 +9,7 @@ from backend.providers import provider, key_for, ProviderFailure
 
 async def main():
     results=[]
-    for name in ['openai','gemini','anthropic']:
+    for name in ['openai','gemini','groq','anthropic']:
         model=os.getenv(name.upper()+'_MODEL','')
         if not key_for(name) or not model:
             results.append({'provider':name,'status':'SKIPPED','reason':'Backend API credentials and an explicit *_MODEL are required'})

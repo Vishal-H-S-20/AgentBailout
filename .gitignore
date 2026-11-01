@@ -11,3 +11,6 @@ __pycache__/
 *.db
 *.db-*
 .env
+
+.env.*
+!.env.example

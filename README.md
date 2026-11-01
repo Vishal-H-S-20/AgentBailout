@@ -1,12 +1,11 @@
 # AgentBailout
 
-AgentBailout 4.0 Phase A/B: official OpenAI, Google GenAI and Claude SDK adapters, model discovery and verified connection checks. **100 tests passed; live cloud smoke tests skipped because credentials are absent.** [Setup](docs/REAL_LLM_SETUP.md) · [Audit and checkpoint report](docs/AGENTBAILOUT4_PHASE_AB.md). General custom stages are the next phase.
+**4.1 update:** custom 1–10 stage multi-LLM pipelines, Groq, secure `.env` loading, repaired connection checks and a warm multicolor interface. **126 tests pass. Live cloud calls remain unverified because credentials are absent.** [Windows CMD setup](docs/PROVIDER_SETUP.md) · [Custom pipelines](docs/REAL_LLM_PIPELINES.md) · [Implementation report](docs/AGENTBAILOUT41_REPORT.md).
 
-Latest repair: compatible pipeline guidance, independent failure/replacement traces, richer comparison and readable report/code output. **76 tests pass**, plus both live dashboard checks. See [repair report and exact demo steps](docs/JUDGE_VIEW_REPAIR.md).
 
-The interface now has five pages: **Home, Build Pipeline, Run & Recover, Compare Results, Settings & History**. Start with Home → Run Quick Demo → Start Task. See [the beginner navigation guide](docs/WEBSITE_NAVIGATION.md) for provider setup and complete click-by-click instructions. Cost/Time/Balanced policies, simulated budgets and deadlines affect backend execution. Gemini and Ollama adapters are mock-tested; live provider verification requires configured services.
 
-Latest update: the critical injection/state repair, reference-inspired dashboard redesign and bounded Python/GitHub diagnostics are implemented. See [AgentBailout 3.0 repair and demo report](docs/AGENTBAILOUT3_REPAIR.md) for exact behavior, evidence and limits. Backend remains on port 8003; dashboard on 8501.
+The interface now has five pages: **Home, Build Pipeline, Run & Recover, Compare Results, Settings & History**. For real execution, start with the provider setup and custom pipeline guides above. Home → Run Quick Demo → Start Task is explicitly offline. See [the beginner navigation guide](docs/WEBSITE_NAVIGATION.md) for provider setup and complete click-by-click instructions. Cost/Time/Balanced policies, simulated budgets and deadlines affect backend execution. Gemini and Ollama adapters are mock-tested; live provider verification requires configured services.
+
 
 **The Self-Healing Control Plane for AI Agents**
 
@@ -15,6 +14,9 @@ Detect. Diagnose. Decide. Repair. Replace. Recover.
 The current build extends the Phase 4 foundation with a five-page interface, working Cost/Time/Balanced selection, simulated budgets and deadline limits. Versioned agents execute ordered workflows under heartbeat monitoring. Baseline failures stop; protected failures trigger bounded compatible replacement. Tasks reuse upstream results and settle a simulated ledger. General configuration self-repair and validated fix reuse remain future work.
 
 ## Implemented
+
+- Arbitrary custom 1–10 stage pipelines: objective, system prompt, provider/model, selected context, output format, limits and explicitly authorized recovery.
+- Official OpenAI, Gemini, Groq and Claude SDK adapters, optional Ollama, backend-only .env loading, model discovery and verified plain-text connection checks.
 
 - Three templates: Research → Format → Summarize; Plan → Code → Validate; Extract → Transform → Review.
 - Database-backed agent registry, immutable versions, ordered workflow builder and selected recovery pool.
@@ -43,7 +45,7 @@ $env:AGENTBAILOUT_BACKEND_URL='http://127.0.0.1:8003'
 .\.venv\Scripts\python.exe -m streamlit run dashboard/app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true
 ```
 
-Open [Dashboard](http://127.0.0.1:8501) or [API docs](http://127.0.0.1:8003/docs). Select a template and crash, then Compare Both in Comparison Lab. No paid service is required for offline execution. To use real agents set OPENAI_API_KEY only in the backend environment, restart, register an OpenAI agent with an actual accessible model identifier, and select it. `.env.example` is documentation, not automatically loaded.
+Open [Dashboard](http://127.0.0.1:8501) or [API docs](http://127.0.0.1:8003/docs). Select a template and crash, then Compare With vs Without AgentBailout in Compare Results. No paid service is required for offline execution. To use real agents set OPENAI_API_KEY only in the backend environment, restart, register an OpenAI agent with an actual accessible model identifier, and select it. The backend loads a root `.env` file without overriding existing process variables; copy the safe `.env.example` locally and follow the current setup guide.
 
 ## Ubuntu startup
 

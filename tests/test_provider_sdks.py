@@ -68,7 +68,7 @@ def test_connection_status_survives_request_but_invalidates_changed_key(client,m
     from backend.providers import ProviderResult
     monkeypatch.setenv('ANTHROPIC_API_KEY','fixture-one')
     class Connection:
-        async def execute(self,*args): return ProviderResult({'ok':True},metadata={'provider':'anthropic','model':'verified-model'})
+        async def generate(self,*args): return ProviderResult('OK',metadata={'provider':'anthropic','model':'verified-model'})
     monkeypatch.setattr('backend.providers.provider',lambda name:Connection())
     response=client.post('/providers/test',json={'provider':'anthropic','model':'verified-model'})
     assert response.status_code==200 and response.json()['checked_at']

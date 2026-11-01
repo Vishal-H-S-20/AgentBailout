@@ -22,6 +22,7 @@ def wait(identity):
     raise AssertionError('Completion deadline exceeded')
 
 page('Build Pipeline')
+widget(app.radio,'Pipeline type').set_value('Guided offline templates').run()
 roles=[s for s in app.selectbox if s.label=='Role']
 assert roles[1].options==['Format'] and roles[2].options==['Summarize']
 widget(app.number_input,'Number of stages').set_value(4).run()

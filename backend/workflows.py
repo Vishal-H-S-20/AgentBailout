@@ -7,16 +7,22 @@ from backend.contracts import CONTRACTS, PROMPT, contract_name, compatible_opera
 from backend.ledger import fund, snapshot
 
 
-def resolve_stages(db, definitions: list[dict]) -> list[dict]:
+def resolve_stages(db, definitions: list[dict], require_configuration=True) -> list[dict]:
     previous_schema = PROMPT
     result = []
     for index,definition in enumerate(definitions):
         operation = definition['operation']
         agent = agent_snapshot(db,definition['agent_id'],definition['version'])
         ok, reason = compatible(agent,operation)
-        if not ok:
+        if not ok and not (not require_configuration and operation=='custom' and reason=='Provider is not configured'):
             raise ValueError(f'{definition["name"]}: {reason}')
-        if previous_schema != CONTRACTS[operation][0]:
+        if operation=='custom':
+            if agent['provider']=='offline': raise ValueError('Custom LLM stages require an explicitly configured real or local model')
+            prior_ids={s.get('id') for s in result}
+            if any(identity not in prior_ids for identity in definition.get('selected_prior_ids',[])):
+                raise ValueError('Selected context must reference earlier stage IDs')
+            if definition.get('id') in prior_ids: raise ValueError('Stage IDs must be unique')
+        if operation!='custom' and previous_schema != CONTRACTS[operation][0]:
             previous=definitions[index-1]['name'] if index else 'the task input'
             suggestions=', '.join(OPERATION_NAMES[o] for o in compatible_operations(previous_schema)) or 'end the pipeline here'
             raise ValueError(f'Step {index+1} “{definition["name"]}” cannot follow “{previous}”: it expects {contract_name(CONTRACTS[operation][0])}, but the preceding step produces {contract_name(previous_schema)}. Suggested next steps: {suggestions}.')
@@ -41,6 +47,10 @@ def create_execution(db, body, config_override: dict | None = None) -> Task:
             from backend.schemas import AgentRef
             refs=[AgentRef.model_validate(r) for r in workflow.definition['recovery_pool']]
         pool = [agent_snapshot(db,r.agent_id,r.version) for r in refs]
+        for definition in stages:
+            for ref in definition.get('backup_agents',[]):
+                candidate=agent_snapshot(db,ref['agent_id'],ref['version'])
+                if not any(a['id']==candidate['id'] and a['version']==candidate['version'] for a in pool): pool.append(candidate)
         config = body.model_dump(mode='json',exclude={'prompt','stages','recovery_pool'})
         config.update(stages=stages,recovery_pool=pool)
         config['failure']['stage_index'] = body.failure.stage_index if body.failure.stage_index is not None else min(1,len(stages)-1)
@@ -88,10 +98,10 @@ def execution_report(db, task_id: str) -> dict:
         primary=definition.get('agent',{})
         stages.append({'id':stage.id,'position':stage.position,'name':stage.name,'operation':operation,
                        'primary_agent_name':primary.get('name',stage.worker_id),'primary_agent_id':primary.get('id'),
-                       'provider':primary.get('provider','unknown'),'status':stage.status,'duration_seconds':stage.duration_seconds,
+                       'definition':{k:v for k,v in definition.items() if k!='agent'},'model':primary.get('model'),'system_instructions':definition.get('system_instructions') or primary.get('system_instructions'),'provider':primary.get('provider','unknown'),'status':stage.status,'duration_seconds':stage.duration_seconds,
                        'input':stage.input,'output':stage.result,'error':stage.error,'recovery_attempts':stage.recovery_attempts,
-                       'input_contract':contract_name(CONTRACTS[operation][0]) if operation else 'Historical contract unavailable',
-                       'output_contract':contract_name(CONTRACTS[operation][1]) if operation else 'Historical contract unavailable',
+                       'input_contract':'Selected task context' if operation=='custom' else contract_name(CONTRACTS[operation][0]) if operation else 'Historical contract unavailable',
+                       'output_contract':definition.get('output_format','markdown').title()+' output' if operation=='custom' else contract_name(CONTRACTS[operation][1]) if operation else 'Historical contract unavailable',
                        'attempts':[a for a in serialized if a['stage_id']==stage.id]})
     events=[{'id':e.id,'timestamp':e.timestamp,'type':e.type,'message':e.message} for e in db.scalars(select(Event).where(Event.task_id==task_id).order_by(Event.id))]
     return {'task_id':task_id,'prompt':task.prompt,'status':task.status,'configuration':execution.configuration if execution else None,

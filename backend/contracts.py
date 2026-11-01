@@ -18,6 +18,7 @@ CONTRACTS = {
     'research':(PROMPT,RESEARCH), 'format':(RESEARCH,REPORT), 'summarize':(REPORT,SUMMARY),
     'plan':(PROMPT,DOCUMENT), 'code':(DOCUMENT,DOCUMENT), 'validate':(DOCUMENT,DOCUMENT),
     'extract':(PROMPT,DOCUMENT), 'transform':(DOCUMENT,DOCUMENT), 'review':(DOCUMENT,DOCUMENT)}
+CONTRACTS['custom']=({'type':'object'},{'type':'object','properties':{'content':{}},'required':['content']})
 TEMPLATES = {
     'research': [('Research','research'),('Formatter','format'),('Synthesis','summarize')],
     'coding': [('Plan','plan'),('Generate Code','code'),('Validate','validate')],
@@ -25,7 +26,7 @@ TEMPLATES = {
 
 CONTRACT_NAMES = [(PROMPT,'Task brief'),(RESEARCH,'Research findings'),(REPORT,'Formatted report'),
                   (SUMMARY,'Final summary'),(DOCUMENT,'Working document')]
-OPERATION_NAMES={'research':'Research','format':'Format','summarize':'Summarize','plan':'Plan','code':'Generate Code','validate':'Validate','extract':'Extract','transform':'Transform','review':'Review'}
+OPERATION_NAMES={'custom':'Custom LLM stage','research':'Research','format':'Format','summarize':'Summarize','plan':'Plan','code':'Generate Code','validate':'Validate','extract':'Extract','transform':'Transform','review':'Review'}
 
 
 def contract_name(schema: dict) -> str:
@@ -39,7 +40,7 @@ def compatible_operations(schema: dict) -> list[str]:
 def catalog() -> dict:
     return {operation:{'label':OPERATION_NAMES[operation],'input':contract_name(required),'output':contract_name(produced),
                        'input_schema':required,'output_schema':produced,'next':compatible_operations(produced)}
-            for operation,(required,produced) in CONTRACTS.items()}
+            for operation,(required,produced) in CONTRACTS.items() if operation!='custom'}
 
 
 def validate(data: dict, schema: dict) -> None:

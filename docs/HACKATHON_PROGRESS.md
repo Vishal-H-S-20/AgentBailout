@@ -48,3 +48,8 @@ No Phase 2 functionality has been claimed or implemented. Dashboard, watchdog, r
 ## AgentBailout 4.0 — Phase A/B provider checkpoint
 
 Official OpenAI Responses, Google GenAI and Claude Messages SDK adapters; model discovery; verified generation connection checks; persisted provider receipts; no real-to-offline recovery. 100 tests passed, final 35 targeted checks passed; live navigation and judge views passed. All three cloud smoke tests skipped because credentials/models are absent. Local Ollama discovery failed and is displayed Disconnected. Preserved 144/144 existing task records. See AGENTBAILOUT4_PHASE_AB.md. Stop at Phase B as requested; arbitrary custom stages are Phase C onward.
+
+
+## AgentBailout 4.1 — custom real multi-LLM implementation
+
+Added Groq, root .env loading and verified agent health; custom 1–10 stage editor on the existing engine; complete context/response persistence, per-stage authorized backup and same-model retry, JSON validation, partial output capture and coordinated warm multicolor theme. 126 tests passed in 74.19s, custom editor/navigation/judge UI checks passed. 162/162 old task records preserved. Cloud smoke tests skipped for missing keys/models. Exact setup and limitations: AGENTBAILOUT41_REPORT.md.

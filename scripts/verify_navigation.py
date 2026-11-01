@@ -51,9 +51,10 @@ assert httpx.get(f'http://127.0.0.1:8003/tasks/{manual_id}').json()['status']=='
 widget(app.button,'Start Task').click().run()
 assert wait(manual_id)['recovery_attempts']==1
 page('Build Pipeline')
+widget(app.radio,'Pipeline type').set_value('Guided offline templates').run()
 widget(app.button,'Add New Agent').click().run()
 provider_form=next(e for e in app.selectbox if e.key=='new_agent_provider')
-assert provider_form.options==['Offline simulation','GPT / OpenAI','Claude','Gemini','Ollama (local)']
+assert provider_form.options==['Offline simulation','GPT / OpenAI','Claude','Groq','Gemini','Ollama (local)']
 widget(app.text_input,'Agent name').set_value('Verified local agent').run()
 widget(app.button,'Test Connection').click().run()
 assert any('Offline simulation is ready' in e.value for e in app.success)
@@ -62,11 +63,11 @@ assert not app.exception
 widget(app.button,'Save Pipeline').click().run()
 assert not app.exception and app.session_state['page']=='Run & Recover'
 assert app.session_state['draft']['workflow_id'].startswith('template-') is False
-widget(app.text_input,'What should the agents do?').set_value('Preserve this task across every page').run()
+widget(app.text_area,'What should the agents do?').set_value('Preserve this task across every page').run()
 widget(app.selectbox,'Recovery policy').select('time').run()
 page('Home')
 page('Run & Recover')
-assert widget(app.text_input,'What should the agents do?').value=='Preserve this task across every page'
+assert widget(app.text_area,'What should the agents do?').value=='Preserve this task across every page'
 assert widget(app.selectbox,'Recovery policy').value=='time'
 page('Compare Results')
 widget(app.button,'Compare With vs Without AgentBailout').click().run()
