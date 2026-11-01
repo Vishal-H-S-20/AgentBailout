@@ -8,9 +8,9 @@ from backend.database import Base
 
 def migrate(engine) -> None:
     tables = inspect(engine).get_table_names()
-    if 'tasks' in tables and any(t not in tables for t in ['executions','diagnostic_runs','attempt_evidence']) and engine.url.database not in {None,':memory:'}:
+    if 'tasks' in tables and any(t not in tables for t in ['executions','diagnostic_runs','attempt_evidence','provider_checks','provider_receipts']) and engine.url.database not in {None,':memory:'}:
         path = Path(engine.url.database).resolve()
-        label = '.pre-v4-' if 'executions' not in tables else '.pre-v4.1-' if 'diagnostic_runs' not in tables else '.pre-trace-'
+        label = '.pre-v4-' if 'executions' not in tables else '.pre-v4.1-' if 'diagnostic_runs' not in tables else '.pre-trace-' if 'attempt_evidence' not in tables else '.pre-providers-'
         backup = path.with_name(path.stem+label+datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')+'.db')
         with sqlite3.connect(str(path)) as source, sqlite3.connect(str(backup)) as destination:
             source.backup(destination)
@@ -20,3 +20,5 @@ def migrate(engine) -> None:
         connection.execute(text('INSERT OR IGNORE INTO schema_migrations VALUES (4, :now)'),{'now':datetime.now(timezone.utc).isoformat()})
         connection.execute(text('INSERT OR IGNORE INTO schema_migrations VALUES (401, :now)'),{'now':datetime.now(timezone.utc).isoformat()})
         connection.execute(text('INSERT OR IGNORE INTO schema_migrations VALUES (501, :now)'),{'now':datetime.now(timezone.utc).isoformat()})
+
+        connection.execute(text('INSERT OR IGNORE INTO schema_migrations VALUES (602, :now)'),{'now':datetime.now(timezone.utc).isoformat()})

@@ -43,3 +43,8 @@ Verification: Python 3.12.10 installed locally; dependencies installed in `.venv
 Backend startup succeeded on 127.0.0.1:8000. Live `/health` returned ok. `scripts/demo.ps1` created task `c7396d2b-7c73-4686-8535-291519dc6106`, started it, observed RUNNING then COMPLETED, and retrieved final output and all nine ordered events. All three stages completed in approximately 1.6 seconds. Temporary database tests verified persistence by disposing and reopening the database. Invalid inputs returned 422, unknown tasks 404, duplicate starts 409. Database and installer are excluded from Git.
 
 No Phase 2 functionality has been claimed or implemented. Dashboard, watchdog, recovery, solvency and ledger remain future work. Ubuntu scripts are supplied but unverified on Linux. Phase 1 checkpoint: await CONTINUE PHASE 2.
+
+
+## AgentBailout 4.0 — Phase A/B provider checkpoint
+
+Official OpenAI Responses, Google GenAI and Claude Messages SDK adapters; model discovery; verified generation connection checks; persisted provider receipts; no real-to-offline recovery. 100 tests passed, final 35 targeted checks passed; live navigation and judge views passed. All three cloud smoke tests skipped because credentials/models are absent. Local Ollama discovery failed and is displayed Disconnected. Preserved 144/144 existing task records. See AGENTBAILOUT4_PHASE_AB.md. Stop at Phase B as requested; arbitrary custom stages are Phase C onward.

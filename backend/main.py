@@ -270,21 +270,63 @@ def create_app(db_engine=engine, factory=SessionLocal) -> FastAPI:
     from backend.diagnostics import DiagnosticRequest, diagnose
 
     class ConnectionRequest(BaseModel):
-        provider: Literal['offline','openai','gemini','ollama']
+        provider: Literal['offline','openai','gemini','anthropic','ollama']
         model: str
+
+    def credential_fingerprint(name):
+        import hashlib, os
+        from backend.providers import key_for
+        material=(key_for(name) or '') if name!='ollama' else os.getenv('OLLAMA_URL','http://127.0.0.1:11434')
+        return hashlib.sha256(material.encode()).hexdigest()
+
+    def save_check(name, report):
+        from backend.models import ProviderCheck
+        from backend.models import now
+        with factory.begin() as db:
+            previous=db.get(ProviderCheck,name)
+            report={**report,'checked_at':now(),'last_success_at':now() if report.get('connected') else (previous.report.get('last_success_at') if previous and previous.credential_fingerprint==credential_fingerprint(name) else None)}
+            if previous:
+                previous.report=report
+                previous.credential_fingerprint=credential_fingerprint(name)
+            else: db.add(ProviderCheck(provider=name,credential_fingerprint=credential_fingerprint(name),report=report))
+        return report
 
     @app.get('/providers')
     def providers():
         import os
         from backend.providers import provider
+        from backend.models import ProviderCheck
         with factory() as db:
             versions=list(db.scalars(select(Agent)))
             result=[]
-            for name in ['offline','openai','gemini','ollama']:
+            for name in ['offline','openai','gemini','anthropic','ollama']:
                 models=[a.configuration['model'] for a in versions if a.configuration['provider']==name]
                 model=os.getenv(name.upper()+'_MODEL',models[-1] if models else 'deterministic-v1' if name=='offline' else '')
-                result.append({'provider':name,'model':model,**provider(name).get_health({'model':model})})
+                row={'provider':name,'model':model,**provider(name).get_health({'model':model}),
+                     'available_models':[],'last_success_at':None,'error':None}
+                check=db.get(ProviderCheck,name)
+                if check and check.credential_fingerprint==credential_fingerprint(name):
+                    report=check.report
+                    row.update(last_success_at=report.get('last_success_at'),available_models=report.get('models',[]),error=report.get('error'))
+                    row['status']='verified_connected' if report.get('connected') else 'disconnected'
+                    row['verified_connection']=bool(report.get('connected'))
+                    row['verified_model']=report.get('model')
+                result.append(row)
             return result
+
+    @app.get('/providers/{name}/models')
+    async def provider_models(name: Literal['openai','gemini','anthropic','ollama']):
+        from backend.providers import provider, ProviderFailure
+        try:
+            models=await asyncio.wait_for(provider(name).list_models(),timeout=20)
+            # Discovery verifies credentials/connectivity, not generation support for every returned model.
+            return {'provider':name,'models':models,'note':'Provider-discovered identifiers; test generation with your selected model.'}
+        except ProviderFailure as exc:
+            save_check(name,{'connected':False,'provider':name,'error':str(exc)})
+            raise HTTPException(422,str(exc)) from None
+        except TimeoutError:
+            save_check(name,{'connected':False,'provider':name,'error':'Model discovery timed out'})
+            raise HTTPException(422,'Model discovery timed out') from None
 
     @app.post('/providers/test')
     async def test_connection(body: ConnectionRequest):
@@ -296,17 +338,15 @@ def create_app(db_engine=engine, factory=SessionLocal) -> FastAPI:
         if body.provider=='offline':
             return {'connected':True,'provider':'offline','message':'Offline simulation is ready; no model call was made.'}
         try:
-            response=await asyncio.wait_for(provider(body.provider).execute({'model':body.model,'system_instructions':'Connection test. Return {"ok":true}.'},'connection_test',{'request':'Return ok true'},schema),timeout=15)
+            response=await asyncio.wait_for(provider(body.provider).execute({'model':body.model,'system_instructions':'Connection test. Return {"ok":true}.','max_output_tokens':128,'timeout_seconds':15},'connection_test',{'request':'Return ok true'},schema),timeout=20)
             validate(response.output,schema)
             if response.output['ok'] is not True:
                 raise ValueError('Connection test response did not confirm readiness')
-            return {'connected':True,'provider':body.provider,'model':body.model,'usage':response.usage,'message':'A real model request completed and its output was validated.'}
-        except ProviderFailure as exc:
-            raise HTTPException(422,str(exc)) from None
-        except TimeoutError:
-            raise HTTPException(422,'Provider connection test timed out') from None
-        except (ValueError,ValidationError):
-            raise HTTPException(422,'Model response did not match the connection-test contract') from None
+            return save_check(body.provider,{'connected':True,'provider':body.provider,'model':body.model,'usage':response.usage,'metadata':response.metadata,'message':'A real model request completed and its output was validated.'})
+        except (ProviderFailure,TimeoutError,ValueError,ValidationError) as exc:
+            message=str(exc) if isinstance(exc,ProviderFailure) else 'Provider connection test timed out' if isinstance(exc,TimeoutError) else 'Model response did not match the connection-test contract'
+            save_check(body.provider,{'connected':False,'provider':body.provider,'model':body.model,'error':message})
+            raise HTTPException(422,message) from None
 
     @app.post('/diagnostics',status_code=201)
     async def diagnostics(body: DiagnosticRequest):

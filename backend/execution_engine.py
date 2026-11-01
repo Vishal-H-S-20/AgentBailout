@@ -9,6 +9,7 @@ from jsonschema import ValidationError
 from backend.models import Task, Stage, Event, Execution, Attempt, Agent, AttemptEvidence, now
 from backend.contracts import CONTRACTS, validate
 from backend.providers import provider, ProviderFailure, ProviderResult
+from backend.models import ProviderReceipt
 from backend.registry import compatible
 from backend.solvency import evaluate
 
@@ -65,6 +66,7 @@ async def attempt(factory, task_id: str, stage_id: str, agent: dict, operation: 
             record = db.get(Attempt,attempt_id)
             record.usage,record.api_cost = response.usage,response.api_cost
             db.get(AttemptEvidence,attempt_id).output=response.output
+            if response.metadata: db.add(ProviderReceipt(attempt_id=attempt_id,details=response.metadata))
         try:
             validate(response.output,CONTRACTS[operation][1])
         except ValidationError:
@@ -132,6 +134,8 @@ async def recover(factory, task_id: str, stage_id: str, definition: dict, data: 
     candidates = []
     for candidate in config['recovery_pool']:
         ok, reason = compatible(candidate,definition['operation'])
+        if definition['agent']['provider']!='offline' and candidate['provider']=='offline':
+            ok,reason = False,'Real LLM stages cannot recover using offline simulation'
         if candidate['estimated_latency'] > config['stage_timeout']:
             ok,reason = False,'Estimated candidate latency exceeds stage runtime limit'
         if candidate['estimated_latency'] > config.get('_deadline',float('inf'))-monotonic():

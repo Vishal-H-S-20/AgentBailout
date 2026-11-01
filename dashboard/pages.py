@@ -31,7 +31,7 @@ def request_body(workflows):
 
 def home(tasks,agents,workflows,providers):
     tested=st.session_state.get('connection_tests',{})
-    st.caption('AI connections · '+' · '.join(PROVIDERS[p['provider']]+': '+('ready' if p['provider']=='offline' else 'last test passed' if tested.get(p['provider'],{}).get('connected') else 'not configured' if p['status']=='unavailable' else 'configured, not tested') for p in providers))
+    st.caption('AI connections · '+' · '.join(PROVIDERS[p['provider']]+': '+('ready' if p['provider']=='offline' else 'verified connected' if p.get('verified_connection') else 'not configured' if p['status']=='unavailable' else 'configured, not tested') for p in providers))
     st.markdown('<div class="welcome"><span class="badge">WELCOME TO AGENTBAILOUT</span><h2>One failure. A way forward.</h2><p>Build an AI pipeline, simulate a failure, and see how intelligent recovery keeps your workflow running.</p></div>',unsafe_allow_html=True)
     a,b,c=st.columns(3)
     with a:
@@ -322,8 +322,21 @@ def settings(tasks,agents,providers):
                 a,b,c=st.columns([1,2,1])
                 with a:
                     st.write(PROVIDERS[row['provider']])
-                    st.caption(row['status'].replace('_',' '))
+                    st.caption(('not configured' if row.get('configuration_status')=='not_configured' and row['status']=='unavailable' else row['status'].replace('_',' ')))
+                    if row.get('last_success_at'): st.caption('Last successful test: '+row['last_success_at'])
+                    if row.get('verified_model'): st.caption('Tested model: '+row['verified_model'])
+                    if row.get('error'): st.warning(row['error'])
                 with b:
+                    if row['provider']!='offline' and st.button('Discover models',key='discover_'+row['provider']):
+                        try:
+                            found=api('GET','/providers/'+row['provider']+'/models')
+                            st.session_state['models_'+row['provider']]=found['models']
+                        except httpx.HTTPError as exc: friendly_error(exc)
+                    discovered=st.session_state.get('models_'+row['provider'],row.get('available_models',[]))
+                    if discovered:
+                        selected=st.selectbox('Available models',discovered,key='discovered_'+row['provider'])
+                        if st.button('Use selected model',key='use_model_'+row['provider']):
+                            st.session_state['provider_model_'+row['provider']]=selected
                     model=st.text_input('Model to test',value=row['model'],key='provider_model_'+row['provider'])
                 with c:
                     if st.button('Test Provider',key='test_'+row['provider']):
@@ -331,10 +344,11 @@ def settings(tasks,agents,providers):
                             response=api('POST','/providers/test',json={'provider':row['provider'],'model':model})
                             st.session_state.connection_tests={**st.session_state.get('connection_tests',{}),row['provider']:response}
                             st.success(response['message'])
+                            st.rerun()
                         except httpx.HTTPError as exc:
                             st.session_state.connection_tests={**st.session_state.get('connection_tests',{}),row['provider']:{'connected':False}}
                             friendly_error(exc)
-        st.caption('Set OPENAI_API_KEY / GEMINI_API_KEY and an accessible model identifier, or run Ollama and install a model. No keys are entered into agent instructions.')
+        st.caption('Set OPENAI_API_KEY / GEMINI_API_KEY (or GOOGLE_API_KEY) / ANTHROPIC_API_KEY and an accessible model identifier, or run Ollama and install a model. No keys are entered into agent instructions.')
     with recovery_tab:
         st.write('Defaults for new tasks; existing runs keep their saved policy.')
         field('max_attempts','Maximum recovery attempts','number',min_value=1,max_value=3)

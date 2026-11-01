@@ -32,7 +32,7 @@ class WorkflowCreate(BaseModel):
 class AgentCreate(BaseModel):
     id: str = Field(pattern=r'^[a-zA-Z0-9_-]{1,80}$')
     name: str = Field(min_length=1,max_length=80)
-    provider: Literal['offline','openai','gemini','ollama'] = 'offline'
+    provider: Literal['offline','openai','gemini','anthropic','ollama'] = 'offline'
     model: str = Field(default='deterministic-v1',min_length=1,max_length=120)
     system_instructions: str = Field(default='Perform the stage and return the declared JSON structure.',min_length=1,max_length=4000)
     capabilities: list[Operation] = Field(min_length=1,max_length=9)

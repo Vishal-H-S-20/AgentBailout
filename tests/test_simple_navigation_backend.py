@@ -93,7 +93,7 @@ def test_configured_provider_registers_and_executes_with_http_mock(client,monkey
         body=json.loads(request.content)
         if source=='gemini':
             assert request.headers['x-goog-api-key']=='test-only-placeholder'
-            assert body['generationConfig']['responseFormat']['text']['schema']['type']=='object'
+            assert body['generationConfig']['responseJsonSchema']['type']=='object'
             return httpx.Response(200,json={'candidates':[{'finishReason':'STOP','content':{'parts':[{'text':json.dumps(output)}]}}],'usageMetadata':{'promptTokenCount':10,'candidatesTokenCount':20}})
         assert body['stream'] is False and body['format']['type']=='object'
         return httpx.Response(200,json={'done':True,'message':{'content':json.dumps(output)},'prompt_eval_count':10,'eval_count':20})
@@ -116,7 +116,7 @@ def test_provider_connection_results_are_not_faked(client,monkeypatch):
         response=client.post('/providers/test',json={'provider':source,'model':'test-model'})
         assert response.status_code==422
         assert 'requires' in response.json()['detail']
-    assert {p['provider'] for p in client.get('/providers').json()}=={'offline','openai','gemini','ollama'}
+    assert {p['provider'] for p in client.get('/providers').json()}=={'offline','openai','gemini','anthropic','ollama'}
 
 
 def test_model_connection_test_validates_output(client,monkeypatch):

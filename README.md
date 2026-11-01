@@ -1,5 +1,7 @@
 # AgentBailout
 
+AgentBailout 4.0 Phase A/B: official OpenAI, Google GenAI and Claude SDK adapters, model discovery and verified connection checks. **100 tests passed; live cloud smoke tests skipped because credentials are absent.** [Setup](docs/REAL_LLM_SETUP.md) · [Audit and checkpoint report](docs/AGENTBAILOUT4_PHASE_AB.md). General custom stages are the next phase.
+
 Latest repair: compatible pipeline guidance, independent failure/replacement traces, richer comparison and readable report/code output. **76 tests pass**, plus both live dashboard checks. See [repair report and exact demo steps](docs/JUDGE_VIEW_REPAIR.md).
 
 The interface now has five pages: **Home, Build Pipeline, Run & Recover, Compare Results, Settings & History**. Start with Home → Run Quick Demo → Start Task. See [the beginner navigation guide](docs/WEBSITE_NAVIGATION.md) for provider setup and complete click-by-click instructions. Cost/Time/Balanced policies, simulated budgets and deadlines affect backend execution. Gemini and Ollama adapters are mock-tested; live provider verification requires configured services.

@@ -73,9 +73,11 @@ def execution_report(db, task_id: str) -> dict:
     serialized=[]
     for attempt in attempts:
         agent=next((a for a in agent_configs if a['id']==attempt.agent_id and a['version']==attempt.agent_version),{})
+        from backend.models import ProviderReceipt
+        receipt=db.get(ProviderReceipt,attempt.id)
         evidence=db.get(AttemptEvidence,attempt.id)
         row={key:getattr(attempt,key) for key in ('id','stage_id','agent_id','agent_version','recovery','status','started_at','ended_at','duration_seconds','error_category','error_fingerprint','usage','api_cost','simulated_cost','output_valid')}
-        row.update(agent_name=agent.get('name',attempt.agent_id),provider=agent.get('provider','unknown'),
+        row.update(provider_metadata=receipt.details if receipt else None,agent_name=agent.get('name',attempt.agent_id),provider=agent.get('provider','unknown'),
                    evidence_available=bool(evidence),input=evidence.input if evidence else None,
                    output=evidence.output if evidence else None,error_message=evidence.error_message if evidence else None)
         serialized.append(row)

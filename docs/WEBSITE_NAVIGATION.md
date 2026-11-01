@@ -136,3 +136,10 @@ The unchanged regression tests and new backend tests pass: **70 tests in 38.38 s
 ```
 
 The UI script needs the backend on port 8003. Temporary databases isolate automated backend tests. A native browser check verified Home, quick-demo setup and completed recovered task 866269bb at 1280×720. Screenshots: docs/screenshots/five-page-home.png and five-page-recovery.png. No false provider-success labels, generated demo results or fake analytics were introduced.
+
+
+## AgentBailout 4.0 Phase A/B checkpoint
+
+The five pages remain. Settings & History now includes Claude and model discovery/selection; verification requires a successful model response. Build Pipeline remains contract-guided until Phase C; it does not yet expose arbitrary custom general-text stages.
+
+See [setup](REAL_LLM_SETUP.md) and [complete audit and test report](AGENTBAILOUT4_PHASE_AB.md).

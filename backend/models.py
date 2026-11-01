@@ -138,3 +138,16 @@ class AttemptEvidence(Base):
     input: Mapped[dict] = mapped_column(JSON)
     output: Mapped[dict | list | str | None] = mapped_column(JSON,nullable=True)
     error_message: Mapped[str | None] = mapped_column(nullable=True)
+
+
+class ProviderCheck(Base):
+    __tablename__ = 'provider_checks'
+    provider: Mapped[str] = mapped_column(primary_key=True)
+    credential_fingerprint: Mapped[str] = mapped_column()
+    report: Mapped[dict] = mapped_column(JSON)
+
+
+class ProviderReceipt(Base):
+    __tablename__ = 'provider_receipts'
+    attempt_id: Mapped[str] = mapped_column(ForeignKey('attempts.id'),primary_key=True)
+    details: Mapped[dict] = mapped_column(JSON)

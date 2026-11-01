@@ -53,7 +53,7 @@ assert wait(manual_id)['recovery_attempts']==1
 page('Build Pipeline')
 widget(app.button,'Add New Agent').click().run()
 provider_form=next(e for e in app.selectbox if e.key=='new_agent_provider')
-assert provider_form.options==['Offline simulation','GPT / OpenAI','Gemini','Ollama (local)']
+assert provider_form.options==['Offline simulation','GPT / OpenAI','Claude','Gemini','Ollama (local)']
 widget(app.text_input,'Agent name').set_value('Verified local agent').run()
 widget(app.button,'Test Connection').click().run()
 assert any('Offline simulation is ready' in e.value for e in app.success)
